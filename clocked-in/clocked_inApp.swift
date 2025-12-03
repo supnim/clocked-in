@@ -8,10 +8,13 @@
 import SwiftUI
 
 @main
-struct clocked_inApp: App {
+struct ClockedInApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+
     var body: some Scene {
-        WindowGroup {
-            ContentView()
+        // Empty scene - all UI handled by AppDelegate
+        Settings {
+            EmptyView()
         }
     }
 }
