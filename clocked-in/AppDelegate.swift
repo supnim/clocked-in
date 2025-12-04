@@ -12,7 +12,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var statusItem: NSStatusItem!
     private var viewModel: MenuBarViewModel!
     private weak var settingsWindow: NSWindow?
-    private weak var aboutWindow: NSWindow?
     private weak var onboardingWindow: NSWindow?
     private var observationTask: Task<Void, Never>?
 
@@ -51,6 +50,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     withObservationTracking {
                         _ = self.viewModel.displayText
                         _ = self.viewModel.tooltipText
+                        _ = self.viewModel.currentPercentage
+                        _ = self.viewModel.isOvertime
+                        _ = self.viewModel.displayStyle
+                        _ = self.viewModel.textDetail
+                        _ = self.viewModel.visualDetail
+                        _ = self.viewModel.accentColor
+                        _ = self.viewModel.weekMode
+                        _ = self.viewModel.monthYearMode
                     } onChange: {
                         continuation.resume()
                     }
@@ -62,8 +69,32 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func updateStatusItem() {
-        statusItem.button?.title = viewModel.displayText
-        statusItem.button?.toolTip = viewModel.tooltipText
+        let result = StatusBarRenderer.render(
+            percentage: viewModel.currentPercentage,
+            mode: viewModel.currentMode,
+            settings: AppSettings.shared,
+            isOvertime: viewModel.isOvertime
+        )
+
+        if let button = statusItem.button {
+            // Handle visual display styles (pie, bar, gauge)
+            if let image = result.image {
+                button.image = image
+                button.imagePosition = .imageLeading
+
+                if let title = result.title {
+                    button.title = " \(title)"  // Space for visual separation
+                } else {
+                    button.title = ""
+                }
+            } else {
+                // Text-only mode
+                button.image = nil
+                button.title = viewModel.displayText
+            }
+
+            button.toolTip = viewModel.tooltipText
+        }
     }
 
     @objc private func statusItemClicked(_ sender: NSStatusBarButton) {
@@ -85,10 +116,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         menu.addItem(NSMenuItem.separator())
 
-        let aboutItem = NSMenuItem(title: "About Clocked In", action: #selector(openAbout), keyEquivalent: "")
-        aboutItem.target = self
-        menu.addItem(aboutItem)
-
         let settingsItem = NSMenuItem(title: "Settings...", action: #selector(openSettings), keyEquivalent: ",")
         settingsItem.target = self
         menu.addItem(settingsItem)
@@ -104,30 +131,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         statusItem.menu = nil
     }
 
-    @objc private func openAbout() {
-        if let window = aboutWindow {
-            window.makeKeyAndOrderFront(nil)
-        } else {
-            let window = NSWindow(contentViewController: NSHostingController(rootView: AboutView()))
-            window.title = "About Clocked In"
-            window.styleMask = [.titled, .closable]
-            window.center()
-            window.delegate = self
-            aboutWindow = window
-            window.makeKeyAndOrderFront(nil)
-        }
-        NSApp.activate(ignoringOtherApps: true)
-    }
-
     @objc private func openSettings() {
         if let window = settingsWindow {
             window.makeKeyAndOrderFront(nil)
         } else {
-            let window = NSWindow(contentViewController: NSHostingController(rootView: SettingsView()))
-            window.title = "Settings"
-            window.styleMask = [.titled, .closable]
-            window.center()
-            window.delegate = self
+            let window = createGlassWindow(
+                content: SettingsView(),
+                title: "Clocked In",
+                size: NSSize(width: 420, height: 680)
+            )
             settingsWindow = window
             window.makeKeyAndOrderFront(nil)
         }
@@ -141,14 +153,50 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 self?.viewModel.startTimer()
             }
 
-        let window = NSWindow(contentViewController: NSHostingController(rootView: onboardingView))
-        window.title = "Welcome to Clocked In"
-        window.styleMask = [.titled, .closable]
-        window.center()
-        window.delegate = self
+        let window = createGlassWindow(
+            content: onboardingView,
+            title: "Welcome to Clocked In",
+            size: NSSize(width: 420, height: 580)
+        )
         onboardingWindow = window
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func createGlassWindow<Content: View>(content: Content, title: String, size: NSSize) -> NSWindow {
+        let window = NSWindow(
+            contentRect: NSRect(origin: .zero, size: size),
+            styleMask: [.titled, .closable, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = title
+        window.titlebarAppearsTransparent = true
+        window.isMovableByWindowBackground = true
+        window.center()
+        window.delegate = self
+
+        // Create visual effect view for glass background
+        let visualEffectView = NSVisualEffectView()
+        visualEffectView.blendingMode = .behindWindow
+        visualEffectView.state = .active
+        visualEffectView.material = .sidebar  // Provides translucent glass effect
+
+        // Host the SwiftUI content
+        let hostingView = NSHostingView(rootView: content)
+        hostingView.translatesAutoresizingMaskIntoConstraints = false
+
+        visualEffectView.addSubview(hostingView)
+        NSLayoutConstraint.activate([
+            hostingView.topAnchor.constraint(equalTo: visualEffectView.topAnchor),
+            hostingView.leadingAnchor.constraint(equalTo: visualEffectView.leadingAnchor),
+            hostingView.trailingAnchor.constraint(equalTo: visualEffectView.trailingAnchor),
+            hostingView.bottomAnchor.constraint(equalTo: visualEffectView.bottomAnchor)
+        ])
+
+        window.contentView = visualEffectView
+
+        return window
     }
 
     @objc private func quitApp() {

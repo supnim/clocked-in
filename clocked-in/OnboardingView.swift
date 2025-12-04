@@ -41,45 +41,62 @@ struct OnboardingView: View {
                     DatePicker("End Time", selection: $settings.dayEndDate, displayedComponents: [.hourAndMinute])
                 }
 
-                Section("Display") {
-                    Picker("Week Calculation", selection: $settings.weekMode) {
+                Section("Display Style") {
+                    Picker("Style", selection: $settings.displayStyle) {
+                        ForEach(DisplayStyle.allCases, id: \.self) { style in
+                            Text(style.rawValue).tag(style)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                }
+
+                Section("Calculation") {
+                    Picker("Week", selection: $settings.weekMode) {
                         ForEach(WeekMode.allCases, id: \.self) { mode in
-                            Text(mode.rawValue).tag(mode)
+                            Text(mode.shortTitle).tag(mode)
                         }
                     }
 
                     Picker("Month & Year", selection: $settings.monthYearMode) {
                         ForEach(CalendarMode.allCases, id: \.self) { mode in
-                            Text(mode.rawValue).tag(mode)
-                        }
-                    }
-
-                    Picker("Show Unit", selection: $settings.unitDisplayMode) {
-                        ForEach(UnitDisplayMode.allCases, id: \.self) { mode in
-                            Text(mode.rawValue).tag(mode)
+                            Text(mode.shortTitle).tag(mode)
                         }
                     }
                 }
             }
             .formStyle(.grouped)
             .scrollDisabled(true)
+            .scrollContentBackground(.hidden)
 
             // Footer with Get Started Button
             Button(action: completeOnboarding) {
                 Text("Get Started")
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.borderedProminent)
+            .applyGlassProminentButtonStyle()
             .controlSize(.large)
             .padding(.horizontal, 20)
             .padding(.bottom, 20)
         }
-        .frame(width: 400, height: 580)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func completeOnboarding() {
         settings.hasCompletedOnboarding = true
         dismiss()
+    }
+}
+
+// MARK: - Liquid Glass Button Style
+
+extension View {
+    @ViewBuilder
+    func applyGlassProminentButtonStyle() -> some View {
+        if #available(macOS 26.0, *) {
+            self.buttonStyle(.glassProminent)
+        } else {
+            self.buttonStyle(.borderedProminent)
+        }
     }
 }
 

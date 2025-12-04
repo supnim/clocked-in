@@ -134,6 +134,10 @@ struct PercentageCalculator: @unchecked Sendable {
             totalDays = 7
             dayIndex = mondayBasedWeekday
         case .workingDays:
+            // If weekend, return 100% (week is complete)
+            if Weekday.isWeekend(weekday) {
+                return 100
+            }
             totalDays = 5
             // If weekend, cap at 5
             dayIndex = min(mondayBasedWeekday, 5)
@@ -166,7 +170,8 @@ struct PercentageCalculator: @unchecked Sendable {
             dayIndex = countWorkingDaysUntil(date, scope: .month)
         }
 
-        let dayProgress = calculateDayProgress(at: date)
+        let weekday = calendar.component(.weekday, from: date)
+        let dayProgress = (settings.monthYearMode == .workingDays && Weekday.isWeekend(weekday)) ? 1.0 : calculateDayProgress(at: date)
         let completedDays = dayIndex - 1
         let percentage = ((Double(completedDays) + dayProgress) / Double(totalDays)) * 100
 
@@ -190,7 +195,8 @@ struct PercentageCalculator: @unchecked Sendable {
             dayIndex = countWorkingDaysUntil(date, scope: .year)
         }
 
-        let dayProgress = calculateDayProgress(at: date)
+        let weekday = calendar.component(.weekday, from: date)
+        let dayProgress = (settings.monthYearMode == .workingDays && Weekday.isWeekend(weekday)) ? 1.0 : calculateDayProgress(at: date)
         let completedDays = dayIndex - 1
         let percentage = ((Double(completedDays) + dayProgress) / Double(totalDays)) * 100
 

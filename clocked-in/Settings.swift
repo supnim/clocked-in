@@ -32,10 +32,46 @@ enum CalendarMode: String, CaseIterable, Codable {
     case workingDays = "Working days only"
 }
 
-enum UnitDisplayMode: String, CaseIterable, Codable {
-    case words = "Words"
-    case icons = "Icons"
-    case none = "None"
+// MARK: - Display Settings (Two-Tier Model)
+
+/// Primary display style choice
+enum DisplayStyle: String, CaseIterable, Codable {
+    case text = "Text"
+    case pie = "Pie"
+    case bar = "Bar"
+    case gauge = "Gauge"
+
+    var isVisual: Bool {
+        self != .text
+    }
+}
+
+/// Detail level for text display style
+enum TextDetail: String, CaseIterable, Codable {
+    case full = "Full"        // "Day 42%"
+    case compact = "Compact"  // "D 42%"
+    case minimal = "Minimal"  // "42%"
+
+    var example: String {
+        switch self {
+        case .full: return "Day 42%"
+        case .compact: return "D 42%"
+        case .minimal: return "42%"
+        }
+    }
+}
+
+/// Detail level for visual display styles (pie, bar, gauge)
+enum VisualDetail: String, CaseIterable, Codable {
+    case withPercent = "With %"
+    case visualOnly = "Visual Only"
+
+    var example: String {
+        switch self {
+        case .withPercent: return "[visual] 42%"
+        case .visualOnly: return "[visual]"
+        }
+    }
 }
 
 @MainActor
@@ -56,7 +92,10 @@ final class AppSettings {
         static let weekMode = "weekMode"
         static let monthYearMode = "monthYearMode"
         static let launchAtLogin = "launchAtLogin"
-        static let unitDisplayMode = "unitDisplayMode"
+        static let displayStyle = "displayStyle"
+        static let textDetail = "textDetail"
+        static let visualDetail = "visualDetail"
+        static let accentColorData = "accentColorData"
     }
 
     var hasCompletedOnboarding: Bool {
@@ -107,10 +146,34 @@ final class AppSettings {
         didSet { defaults.set(launchAtLogin, forKey: Keys.launchAtLogin) }
     }
 
-    var unitDisplayMode: UnitDisplayMode {
+    var displayStyle: DisplayStyle {
         didSet {
-            if let encoded = try? JSONEncoder().encode(unitDisplayMode) {
-                defaults.set(encoded, forKey: Keys.unitDisplayMode)
+            if let encoded = try? JSONEncoder().encode(displayStyle) {
+                defaults.set(encoded, forKey: Keys.displayStyle)
+            }
+        }
+    }
+
+    var textDetail: TextDetail {
+        didSet {
+            if let encoded = try? JSONEncoder().encode(textDetail) {
+                defaults.set(encoded, forKey: Keys.textDetail)
+            }
+        }
+    }
+
+    var visualDetail: VisualDetail {
+        didSet {
+            if let encoded = try? JSONEncoder().encode(visualDetail) {
+                defaults.set(encoded, forKey: Keys.visualDetail)
+            }
+        }
+    }
+
+    var accentColor: Color {
+        didSet {
+            if let data = accentColor.toData() {
+                defaults.set(data, forKey: Keys.accentColorData)
             }
         }
     }
@@ -122,8 +185,22 @@ final class AppSettings {
         }
         set {
             let components = Calendar.current.dateComponents([.hour, .minute], from: newValue)
-            dayStartHour = components.hour ?? 9
-            dayStartMinute = components.minute ?? 0
+            let newStartHour = components.hour ?? 9
+            let newStartMinute = components.minute ?? 0
+
+            // Validate: ensure new start time is before end time
+            let newStartMinutes = newStartHour * 60 + newStartMinute
+            let currentEndMinutes = dayEndHour * 60 + dayEndMinute
+
+            if newStartMinutes >= currentEndMinutes {
+                // Adjust end time to be at least 1 hour after new start time
+                let adjustedEndMinutes = newStartMinutes + 60
+                dayEndHour = (adjustedEndMinutes / 60) % 24
+                dayEndMinute = adjustedEndMinutes % 60
+            }
+
+            dayStartHour = newStartHour
+            dayStartMinute = newStartMinute
         }
     }
 
@@ -133,13 +210,33 @@ final class AppSettings {
         }
         set {
             let components = Calendar.current.dateComponents([.hour, .minute], from: newValue)
-            dayEndHour = components.hour ?? 17
-            dayEndMinute = components.minute ?? 0
+            let newEndHour = components.hour ?? 17
+            let newEndMinute = components.minute ?? 0
+
+            // Validate: ensure new end time is after start time
+            let newEndMinutes = newEndHour * 60 + newEndMinute
+            let currentStartMinutes = dayStartHour * 60 + dayStartMinute
+
+            if newEndMinutes <= currentStartMinutes {
+                // Adjust to be at least 1 hour after start time
+                let adjustedEndMinutes = currentStartMinutes + 60
+                dayEndHour = (adjustedEndMinutes / 60) % 24
+                dayEndMinute = adjustedEndMinutes % 60
+            } else {
+                dayEndHour = newEndHour
+                dayEndMinute = newEndMinute
+            }
         }
     }
 
     var workdayDurationMinutes: Int {
         (dayEndHour * 60 + dayEndMinute) - (dayStartHour * 60 + dayStartMinute)
+    }
+
+    var isValidWorkDay: Bool {
+        let endMinutes = dayEndHour * 60 + dayEndMinute
+        let startMinutes = dayStartHour * 60 + dayStartMinute
+        return endMinutes > startMinutes
     }
 
     var minutesPerPercent: Double {
@@ -175,11 +272,75 @@ final class AppSettings {
             self.monthYearMode = .allDays
         }
 
-        if let data = defaults.data(forKey: Keys.unitDisplayMode),
-           let decoded = try? JSONDecoder().decode(UnitDisplayMode.self, from: data) {
-            self.unitDisplayMode = decoded
+        if let data = defaults.data(forKey: Keys.displayStyle),
+           let decoded = try? JSONDecoder().decode(DisplayStyle.self, from: data) {
+            self.displayStyle = decoded
         } else {
-            self.unitDisplayMode = .words
+            self.displayStyle = .text
         }
+
+        if let data = defaults.data(forKey: Keys.textDetail),
+           let decoded = try? JSONDecoder().decode(TextDetail.self, from: data) {
+            self.textDetail = decoded
+        } else {
+            self.textDetail = .full
+        }
+
+        if let data = defaults.data(forKey: Keys.visualDetail),
+           let decoded = try? JSONDecoder().decode(VisualDetail.self, from: data) {
+            self.visualDetail = decoded
+        } else {
+            self.visualDetail = .withPercent
+        }
+
+        if let data = defaults.data(forKey: Keys.accentColorData),
+           let color = Color.fromData(data) {
+            self.accentColor = color
+        } else {
+            self.accentColor = .blue
+        }
+    }
+}
+
+// MARK: - Color Serialization
+
+import SwiftUI
+
+extension Color {
+    func toData() -> Data? {
+        var red: CGFloat = 0
+        var green: CGFloat = 0
+        var blue: CGFloat = 0
+        var alpha: CGFloat = 1
+
+        // Convert to NSColor and try to get RGB components safely
+        let nsColor = NSColor(self)
+
+        // Try to convert to sRGB color space for safe component extraction
+        if let rgbColor = nsColor.usingColorSpace(.sRGB) {
+            rgbColor.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+        } else if let rgbColor = nsColor.usingColorSpace(.deviceRGB) {
+            rgbColor.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+        } else {
+            // Default to blue if color space conversion fails
+            red = 0; green = 0; blue = 1; alpha = 1
+        }
+
+        return try? JSONEncoder().encode([red, green, blue, alpha])
+    }
+
+    static func fromData(_ data: Data) -> Color? {
+        guard let components = try? JSONDecoder().decode([CGFloat].self, from: data),
+              components.count == 4 else { return nil }
+        return Color(
+            red: components[0],
+            green: components[1],
+            blue: components[2],
+            opacity: components[3]
+        )
+    }
+
+    var nsColor: NSColor {
+        NSColor(self)
     }
 }

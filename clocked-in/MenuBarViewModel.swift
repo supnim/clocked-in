@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import SwiftUI
 
 @MainActor
 @Observable
@@ -17,12 +18,39 @@ final class MenuBarViewModel {
     // MARK: - Public Properties
 
     var displayText: String = ""
+    var currentPercentage: Int = 0
+    var isOvertime: Bool = false
+
     var currentMode: ViewMode {
         settings.currentViewMode
     }
 
     var tooltipText: String {
         generateTooltipText()
+    }
+
+    var displayStyle: DisplayStyle {
+        settings.displayStyle
+    }
+
+    var textDetail: TextDetail {
+        settings.textDetail
+    }
+
+    var visualDetail: VisualDetail {
+        settings.visualDetail
+    }
+
+    var accentColor: Color {
+        settings.accentColor
+    }
+
+    var weekMode: WeekMode {
+        settings.weekMode
+    }
+
+    var monthYearMode: CalendarMode {
+        settings.monthYearMode
     }
 
     // MARK: - Initialization
@@ -79,36 +107,50 @@ final class MenuBarViewModel {
 
         switch status {
         case .beforeWork:
+            currentPercentage = 0
+            isOvertime = false
             displayText = formatDisplay(mode: .day, percentage: 0)
         case .working(let percentage):
+            currentPercentage = percentage
+            isOvertime = false
             displayText = formatDisplay(mode: .day, percentage: percentage)
         case .overtime:
+            currentPercentage = 100
+            isOvertime = true
             displayText = "Overtime"
         }
     }
 
     private func updateWeekDisplay() {
         let percentage = calculator.calculateWeekPercentage()
+        currentPercentage = percentage
+        isOvertime = false
         displayText = formatDisplay(mode: .week, percentage: percentage)
     }
 
     private func updateMonthDisplay() {
         let percentage = calculator.calculateMonthPercentage()
+        currentPercentage = percentage
+        isOvertime = false
         displayText = formatDisplay(mode: .month, percentage: percentage)
     }
 
     private func updateYearDisplay() {
         let percentage = calculator.calculateYearPercentage()
+        currentPercentage = percentage
+        isOvertime = false
         displayText = formatDisplay(mode: .year, percentage: percentage)
     }
 
     private func formatDisplay(mode: ViewMode, percentage: Int) -> String {
         let percentageText = "\(percentage)%"
 
-        switch settings.unitDisplayMode {
-        case .words:
+        // For visual styles, the StatusBarRenderer handles display
+        // This is only used for text style
+        switch settings.textDetail {
+        case .full:
             return "\(mode.rawValue) \(percentageText)"
-        case .icons:
+        case .compact:
             let icon: String
             switch mode {
             case .day: icon = "D"
@@ -117,7 +159,7 @@ final class MenuBarViewModel {
             case .year: icon = "Y"
             }
             return "\(icon) \(percentageText)"
-        case .none:
+        case .minimal:
             return percentageText
         }
     }
