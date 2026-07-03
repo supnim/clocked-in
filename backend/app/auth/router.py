@@ -1,12 +1,14 @@
 """Authentication router for Google OAuth and Apple Sign-In flows."""
 
+import secrets
 import uuid
+from datetime import datetime, timezone
 from typing import Annotated
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.auth.apple import verify_apple_identity_token
 from app.auth.jwt import create_access_token, get_current_user
@@ -16,8 +18,11 @@ from app.auth.oauth import (
     get_google_user_info,
 )
 from app.database import get_db
+from app.redis_client import get_redis
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+_OAUTH_STATE_TTL = 600  # 10 minutes
 
 
 def generate_username_from_email(email: str) -> str:
@@ -28,16 +33,76 @@ def generate_username_from_email(email: str) -> str:
     return username.lower()[:30] if username else "user"
 
 
+# Device registration models
+class DeviceRegisterRequest(BaseModel):
+    """Request body for device-based registration."""
+
+    device_id: str = Field(min_length=1, max_length=255)
+    platform: str = "macos"
+
+
+class DeviceRegisterResponse(BaseModel):
+    """Response from device registration."""
+
+    token: str
+    user_id: str
+    is_new: bool
+
+
+@router.post("/device", response_model=DeviceRegisterResponse)
+async def register_device(
+    request: DeviceRegisterRequest,
+    db: Annotated[asyncpg.Connection, Depends(get_db)],
+) -> DeviceRegisterResponse:
+    """Register or authenticate via device ID.
+
+    If the device is already registered, returns existing user token.
+    Otherwise creates a new user with an empty username (must pick one after).
+    Note: users table needs a `device_id` column (TEXT, NULLABLE, UNIQUE).
+    """
+    # Attempt to insert; ON CONFLICT handles the race condition
+    user_uuid = uuid.uuid4()
+    now = datetime.now(timezone.utc)
+    placeholder_username = f"user_{uuid.uuid4().hex[:12]}"
+    row = await db.fetchrow(
+        "INSERT INTO users (id, device_id, username, created_at, updated_at) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (device_id) DO NOTHING RETURNING id",
+        user_uuid,
+        request.device_id,
+        placeholder_username,
+        now,
+        now,
+    )
+
+    if row:
+        # New user created
+        user_id = str(row["id"])
+        token = create_access_token(user_id=user_id)
+        return DeviceRegisterResponse(token=token, user_id=user_id, is_new=True)
+
+    # Device already registered — fetch existing user
+    user = await db.fetchrow(
+        "SELECT id FROM users WHERE device_id = $1", request.device_id
+    )
+    token = create_access_token(user_id=str(user["id"]))
+    return DeviceRegisterResponse(
+        token=token, user_id=str(user["id"]), is_new=False
+    )
+
+
 @router.get("/google")
 async def google_auth() -> RedirectResponse:
     """Redirect to Google OAuth authorization URL."""
-    auth_url = get_google_auth_url()
+    state = secrets.token_urlsafe(32)
+    r = get_redis()
+    await r.set(f"oauth_state:{state}", "1", ex=_OAUTH_STATE_TTL)
+    auth_url = get_google_auth_url(state=state)
     return RedirectResponse(url=auth_url)
 
 
 @router.get("/callback")
 async def google_callback(
     code: Annotated[str, Query(description="Authorization code from Google")],
+    state: Annotated[str, Query(description="CSRF state parameter")],
     db: Annotated[asyncpg.Connection, Depends(get_db)],
 ) -> RedirectResponse:
     """Handle Google OAuth callback.
@@ -45,6 +110,13 @@ async def google_callback(
     Exchanges authorization code for tokens, gets user info,
     finds or creates user, and redirects to app with JWT.
     """
+    # Validate CSRF state
+    r = get_redis()
+    state_key = f"oauth_state:{state}"
+    valid = await r.delete(state_key)
+    if not valid:
+        raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
+
     # Exchange code for Google tokens
     tokens = await exchange_code_for_tokens(code)
     access_token = tokens["access_token"]

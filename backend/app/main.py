@@ -1,11 +1,15 @@
 """FastAPI main application."""
 
+import logging
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
+
+logger = logging.getLogger(__name__)
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, Depends
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.config import validate as validate_config
 from app.database import close_db, get_pool, init_db
 from app.api.deps import get_current_user
 from app.redis_client import close_redis, get_redis, init_redis
@@ -21,6 +25,7 @@ from app.ws.presence import presence_manager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan handler for startup and shutdown."""
     # Startup
+    validate_config()
     pool = await init_db()
     await init_redis()
     # Set database pool on presence manager for friend lookups
@@ -125,35 +130,38 @@ async def websocket_endpoint(
 
             elif msg_type == "presence_update":
                 presence_data = data.get("data", {})
+                if not isinstance(presence_data, dict) or "app_name" not in presence_data:
+                    continue
                 await presence_manager.update_presence(user_id, presence_data)
 
             elif msg_type == "nudge":
                 target_user_id = data.get("data", {}).get("to_user_id")
-                if target_user_id:
-                    # Get sender username for the nudge display
-                    sender_username = None
-                    pool = get_pool()
-                    if pool:
-                        async with pool.acquire() as conn:
-                            row = await conn.fetchrow(
-                                "SELECT username FROM users WHERE id = $1::uuid",
-                                user_id,
-                            )
-                            if row:
-                                sender_username = row["username"]
+                if not isinstance(target_user_id, str) or not target_user_id.strip():
+                    continue
+                # Get sender username for the nudge display
+                sender_username = None
+                pool = get_pool()
+                if pool:
+                    async with pool.acquire() as conn:
+                        row = await conn.fetchrow(
+                            "SELECT username FROM users WHERE id = $1::uuid",
+                            user_id,
+                        )
+                        if row:
+                            sender_username = row["username"]
 
-                    await manager.send_to_user(target_user_id, {
-                        "type": "nudge",
-                        "data": {
-                            "from_user_id": user_id,
-                            "from_username": sender_username
-                        }
-                    })
+                await manager.send_to_user(target_user_id, {
+                    "type": "nudge",
+                    "data": {
+                        "from_user_id": user_id,
+                        "from_username": sender_username
+                    }
+                })
 
     except WebSocketDisconnect:
         pass
     except Exception:
-        pass
+        logger.exception("WebSocket error for user %s", user_id)
     finally:
         # Cleanup
         manager.disconnect(user_id)

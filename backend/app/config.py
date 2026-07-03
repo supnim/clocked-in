@@ -42,3 +42,24 @@ class Config:
 
 
 config = Config()
+
+
+def validate() -> None:
+    """Validate critical configuration for production readiness.
+
+    Raises:
+        ValueError: If any critical config is missing or insecure.
+    """
+    errors: list[str] = []
+
+    if not config.DEBUG and config.JWT_SECRET == "dev-secret-change-in-production":
+        errors.append("JWT_SECRET must be changed from default in production")
+
+    if not os.getenv("DATABASE_URL"):
+        errors.append("DATABASE_URL environment variable is not set")
+
+    if not os.getenv("REDIS_URL"):
+        errors.append("REDIS_URL environment variable is not set")
+
+    if errors:
+        raise ValueError("Config validation failed:\n  - " + "\n  - ".join(errors))

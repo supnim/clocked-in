@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 from typing import Any
 from uuid import UUID
 
@@ -52,6 +53,7 @@ class PresenceManager:
         presence_data = {
             "user_id": user_id,
             "online": "true",
+            "updated_at": str(int(time.time() * 1000)),
             **{k: json.dumps(v) if isinstance(v, (dict, list)) else str(v) for k, v in data.items()},
         }
 
@@ -78,6 +80,7 @@ class PresenceManager:
         offline_data = {
             "user_id": user_id,
             "online": "false",
+            "updated_at": str(int(time.time() * 1000)),
         }
 
         # Update presence to offline (short TTL for cleanup)

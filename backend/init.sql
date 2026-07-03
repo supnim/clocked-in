@@ -12,6 +12,7 @@ CREATE TABLE users (
     avatar_url TEXT,
     status_message VARCHAR(280),
     apple_user_id VARCHAR(255) UNIQUE,
+    device_id VARCHAR(255) UNIQUE,
     settings JSONB NOT NULL DEFAULT '{
         "nudge_shake": true,
         "nudge_sound": true,
@@ -55,6 +56,7 @@ CREATE TABLE friend_requests (
 -- =============================================================================
 CREATE INDEX idx_users_username ON users(username);
 CREATE INDEX idx_users_apple_user_id ON users(apple_user_id);
+CREATE INDEX idx_users_device_id ON users(device_id);
 CREATE INDEX idx_friendships_user1 ON friendships(user_id_1);
 CREATE INDEX idx_friendships_user2 ON friendships(user_id_2);
 CREATE INDEX idx_friend_requests_recipient ON friend_requests(recipient_id, status);

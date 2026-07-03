@@ -3,6 +3,9 @@
 Verifies Apple identity tokens using Apple's public keys (JWKS).
 """
 
+import asyncio
+import time
+
 import httpx
 from jose import jwt, JWTError
 from jose.exceptions import ExpiredSignatureError
@@ -16,6 +19,10 @@ APPLE_ISSUER = "https://appleid.apple.com"
 
 # Cache for Apple's public keys
 _apple_keys_cache: dict | None = None
+_apple_keys_fetched_at: float = 0.0
+_apple_keys_lock = asyncio.Lock()
+
+_CACHE_TTL_SECONDS = 86400  # 24 hours
 
 
 async def get_apple_public_keys() -> dict:
@@ -24,16 +31,25 @@ async def get_apple_public_keys() -> dict:
     Returns:
         The JWKS (JSON Web Key Set) from Apple.
     """
-    global _apple_keys_cache
+    global _apple_keys_cache, _apple_keys_fetched_at
 
-    if _apple_keys_cache is not None:
+    cache_expired = (time.monotonic() - _apple_keys_fetched_at) > _CACHE_TTL_SECONDS
+
+    if _apple_keys_cache is not None and not cache_expired:
         return _apple_keys_cache
 
-    async with httpx.AsyncClient() as client:
-        response = await client.get(APPLE_KEYS_URL)
-        response.raise_for_status()
-        _apple_keys_cache = response.json()
-        return _apple_keys_cache
+    async with _apple_keys_lock:
+        # Double-check after acquiring lock
+        cache_expired = (time.monotonic() - _apple_keys_fetched_at) > _CACHE_TTL_SECONDS
+        if _apple_keys_cache is not None and not cache_expired:
+            return _apple_keys_cache
+
+        async with httpx.AsyncClient() as client:
+            response = await client.get(APPLE_KEYS_URL)
+            response.raise_for_status()
+            _apple_keys_cache = response.json()
+            _apple_keys_fetched_at = time.monotonic()
+            return _apple_keys_cache
 
 
 async def verify_apple_identity_token(identity_token: str) -> dict:
@@ -79,5 +95,6 @@ def clear_keys_cache() -> None:
 
     Useful if keys need to be refreshed after a rotation.
     """
-    global _apple_keys_cache
+    global _apple_keys_cache, _apple_keys_fetched_at
     _apple_keys_cache = None
+    _apple_keys_fetched_at = 0.0

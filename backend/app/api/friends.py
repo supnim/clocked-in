@@ -5,7 +5,7 @@ from typing import Annotated
 from uuid import UUID
 
 import asyncpg
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
 from app.api.deps import get_current_user
@@ -86,7 +86,9 @@ async def get_presence_from_redis(user_id: str) -> PresenceData:
             app_bundle_id=data.get("bundle_id"),  # Match WebSocket field name
             window_title=data.get("window_title"),
             url=data.get("browser_domain"),  # Map browser_domain to url
-            updated_at=datetime.fromisoformat(data["updated_at"])
+            updated_at=datetime.fromtimestamp(
+                int(data["updated_at"]) / 1000, tz=timezone.utc
+            )
             if isinstance(data.get("updated_at"), str)
             else None,
         )
@@ -110,14 +112,14 @@ async def invalidate_friend_cache(redis, user_id: str) -> None:
 async def get_friends(
     current_user: Annotated[str, Depends(get_current_user)],
     db: Annotated[asyncpg.Connection, Depends(get_db)],
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
 ) -> list[FriendResponse]:
     """Get list of friends with their current presence.
 
-    Returns all friends of the authenticated user along with their
+    Returns friends of the authenticated user along with their
     real-time presence data from Redis.
     """
-    # Query friendships where user is either user_id_1 or user_id_2
-    # Parse current_user string to UUID for database query
     try:
         user_uuid = UUID(current_user)
     except ValueError:
@@ -139,8 +141,10 @@ async def get_friends(
             (f.user_id_2 = $1 AND f.user_id_1 = u.id)
         )
         WHERE f.user_id_1 = $1 OR f.user_id_2 = $1
+        ORDER BY f.created_at DESC
+        LIMIT $2 OFFSET $3
     """
-    rows = await db.fetch(query, user_uuid)
+    rows = await db.fetch(query, user_uuid, limit, offset)
 
     friends = []
     for row in rows:
@@ -209,37 +213,37 @@ async def send_friend_request(
             detail="Already friends with this user",
         )
 
-    # Check for existing pending request (either direction)
-    existing_request = await db.fetchrow(
-        """
-        SELECT 1 FROM friend_requests
-        WHERE status = 'pending'
-        AND (
-            (sender_id = $1 AND recipient_id = $2)
-            OR (sender_id = $2 AND recipient_id = $1)
-        )
-        """,
-        current_user,
-        target_id,
-    )
-    if existing_request:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Friend request already pending",
-        )
-
-    # Create friend request
+    # Check-then-insert in a transaction to avoid race conditions
     now = datetime.now(timezone.utc)
-    request_row = await db.fetchrow(
-        """
-        INSERT INTO friend_requests (sender_id, recipient_id, status, created_at, updated_at)
-        VALUES ($1, $2, 'pending', $3, $3)
-        RETURNING id, created_at
-        """,
-        current_user,
-        target_id,
-        now,
-    )
+    async with db.transaction():
+        existing_request = await db.fetchrow(
+            """
+            SELECT 1 FROM friend_requests
+            WHERE status = 'pending'
+            AND (
+                (sender_id = $1 AND recipient_id = $2)
+                OR (sender_id = $2 AND recipient_id = $1)
+            )
+            """,
+            current_user,
+            target_id,
+        )
+        if existing_request:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Friend request already pending",
+            )
+
+        request_row = await db.fetchrow(
+            """
+            INSERT INTO friend_requests (sender_id, recipient_id, status, created_at, updated_at)
+            VALUES ($1, $2, 'pending', $3, $3)
+            RETURNING id, created_at
+            """,
+            current_user,
+            target_id,
+            now,
+        )
 
     return FriendRequestSentResponse(
         id=str(request_row["id"]),
@@ -254,10 +258,12 @@ async def send_friend_request(
 async def get_pending_requests(
     current_user: Annotated[str, Depends(get_current_user)],
     db: Annotated[asyncpg.Connection, Depends(get_db)],
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
 ) -> list[FriendRequestResponse]:
     """Get pending incoming friend requests.
 
-    Returns all friend requests where the authenticated user is the
+    Returns friend requests where the authenticated user is the
     recipient and the status is 'pending'.
     """
     query = """
@@ -272,8 +278,9 @@ async def get_pending_requests(
         JOIN users u ON fr.sender_id = u.id
         WHERE fr.recipient_id = $1 AND fr.status = 'pending'
         ORDER BY fr.created_at DESC
+        LIMIT $2 OFFSET $3
     """
-    rows = await db.fetch(query, current_user)
+    rows = await db.fetch(query, current_user, limit, offset)
 
     return [
         FriendRequestResponse(

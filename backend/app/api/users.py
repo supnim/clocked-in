@@ -1,11 +1,13 @@
 """Users API endpoints."""
 
+import re
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
 import asyncpg
-from fastapi import APIRouter, Depends, HTTPException, status
+import asyncpg.exceptions
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from app.database import get_db
@@ -106,42 +108,29 @@ async def update_current_user_profile(
     db: asyncpg.Connection = Depends(get_db),
 ) -> UserResponse:
     """Update the current authenticated user's profile."""
-    # Build dynamic update query
-    updates: list[str] = []
-    values: list[Any] = []
-    param_idx = 1
-
+    # Build dynamic update from provided fields
+    fields: list[tuple[str, Any]] = []
     if update.display_name is not None:
-        updates.append(f"display_name = ${param_idx}")
-        values.append(update.display_name)
-        param_idx += 1
-
+        fields.append(("display_name", update.display_name))
     if update.status_message is not None:
-        updates.append(f"status_message = ${param_idx}")
-        values.append(update.status_message)
-        param_idx += 1
-
+        fields.append(("status_message", update.status_message))
     if update.settings is not None:
-        updates.append(f"settings = ${param_idx}")
-        values.append(update.settings.model_dump())
-        param_idx += 1
+        fields.append(("settings", update.settings.model_dump()))
 
-    if not updates:
-        # No updates provided, just return current user
+    if not fields:
         return await get_current_user_profile(current_user, db)
 
-    # Always update updated_at
-    updates.append(f"updated_at = ${param_idx}")
-    values.append(datetime.now(timezone.utc))
-    param_idx += 1
+    fields.append(("updated_at", datetime.now(timezone.utc)))
 
-    # Add user_id as final parameter
+    set_clause = ", ".join(f"{col} = ${i+1}" for i, (col, _) in enumerate(fields))
+    values = [v for _, v in fields]
+    user_param = f"${len(values) + 1}"
     values.append(current_user)
 
     query = f"""
         UPDATE users
-        SET {", ".join(updates)}
-        WHERE id = ${param_idx}
+        SET {set_clause}
+        WHERE id = {user_param}
         RETURNING id, username, email, display_name, avatar_url,
                   status_message, settings, created_at, updated_at
     """
@@ -155,6 +144,98 @@ async def update_current_user_profile(
         )
 
     return _row_to_user_response(row)
+
+
+class UsernameClaimRequest(BaseModel):
+    """Request body for claiming a username."""
+
+    username: str
+
+
+class UsernameAvailabilityResponse(BaseModel):
+    """Response for username availability check."""
+
+    available: bool
+
+
+USERNAME_REGEX = re.compile(r"^[a-z0-9_]{3,20}$")
+
+
+@router.get("/check-username/{username}", response_model=UsernameAvailabilityResponse)
+async def check_username_availability(
+    username: str,
+    db: asyncpg.Connection = Depends(get_db),
+) -> UsernameAvailabilityResponse:
+    """Check if a username is available."""
+    exists = await db.fetchval("SELECT 1 FROM users WHERE username = $1", username)
+    return UsernameAvailabilityResponse(available=not exists)
+
+
+@router.post("/username")
+async def claim_username(
+    body: UsernameClaimRequest,
+    current_user: str = Depends(get_current_user),
+    db: asyncpg.Connection = Depends(get_db),
+) -> dict:
+    """Claim or change a username for the current user."""
+    username = body.username.lower()
+
+    # Validate format
+    if not USERNAME_REGEX.match(username):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Username must be 3-20 characters, lowercase letters, numbers, and underscores only",
+        )
+
+    # Check availability
+    existing = await db.fetchval(
+        "SELECT id FROM users WHERE username = $1 AND id != $2",
+        username,
+        current_user,
+    )
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Username is already taken",
+        )
+
+    # Update username
+    try:
+        await db.execute(
+            "UPDATE users SET username = $1, updated_at = $2 WHERE id = $3",
+            username,
+            datetime.now(timezone.utc),
+            current_user,
+        )
+    except asyncpg.exceptions.UniqueViolationError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Username is already taken",
+        )
+
+    return {"username": username}
+
+
+@router.get("/search")
+async def search_users(
+    q: str = Query(..., min_length=1),
+    db: asyncpg.Connection = Depends(get_db),
+) -> list[PublicUserResponse]:
+    """Search for users by username prefix."""
+    escaped = q.lower().replace("%", "\\%").replace("_", "\\_")
+    rows = await db.fetch(
+        "SELECT id, username, display_name, avatar_url FROM users WHERE username ILIKE $1 LIMIT 20",
+        f"%{escaped}%",
+    )
+    return [
+        PublicUserResponse(
+            id=row["id"],
+            username=row["username"],
+            display_name=row["display_name"],
+            avatar_url=row["avatar_url"],
+        )
+        for row in rows
+    ]
 
 
 @router.get("/{username}", response_model=PublicUserResponse)
