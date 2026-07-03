@@ -5,16 +5,11 @@ struct FriendRow: View {
     var onTap: (() -> Void)? = nil
     var onNudge: (() -> Void)? = nil
     var onRemove: (() -> Void)? = nil
-    var timelineData: TimelineData? = nil
 
     /// Current user's activity for highlight comparison
     var currentUserActivity: Activity? = nil
 
     @State private var isHovered = false
-    @State private var isExpanded = false
-
-    /// Callback when expansion state changes (for notch height adjustment)
-    var onExpansionChange: ((Bool) -> Void)? = nil
 
     /// Whether the current user is in the same app as this friend
     private var isInSameApp: Bool {
@@ -112,11 +107,6 @@ struct FriendRow: View {
                 }
 
                 Spacer()
-
-                // Expand button (only show if timeline data available)
-                if timelineData != nil {
-                    expandButton
-                }
             }
             .padding(.vertical, 6)
             .padding(.horizontal, 8)
@@ -148,14 +138,7 @@ struct FriendRow: View {
                 Divider()
                 Button("Remove Friend", role: .destructive) { onRemove?() }
             }
-
-            // Expanded content with timeline
-            if isExpanded, let data = timelineData {
-                expandedContent(data: data)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-            }
         }
-        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isExpanded)
     }
 
     // MARK: - Subviews
@@ -192,73 +175,6 @@ struct FriendRow: View {
                 .fill(Color.green.opacity(0.15))
         )
         .accessibilityLabel("Working together")
-    }
-
-    private var expandButton: some View {
-        Button {
-            withAnimation {
-                isExpanded.toggle()
-            }
-            onExpansionChange?(isExpanded)
-        } label: {
-            HStack(spacing: 2) {
-                Text(isExpanded ? "Less" : "More")
-                    .font(.caption2.weight(.medium))
-                Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                    .font(.caption2.weight(.semibold))
-            }
-            .foregroundColor(.secondary)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 3)
-            .background(
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(Color.white.opacity(0.05))
-            )
-        }
-        .buttonStyle(.plain)
-    }
-
-    @ViewBuilder
-    private func expandedContent(data: TimelineData) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // Timeline bar
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Today's Activity")
-                    .font(.caption2.weight(.medium))
-                    .foregroundColor(.secondary)
-
-                TimelineBar(data: data)
-                    .frame(height: 20)
-            }
-
-            // Legend (top apps)
-            VStack(alignment: .leading, spacing: 4) {
-                ForEach(data.apps.prefix(4), id: \.bundleId) { app in
-                    HStack(spacing: 6) {
-                        Circle()
-                            .fill(app.color)
-                            .frame(width: 6, height: 6)
-
-                        Text(app.appName)
-                            .font(.caption2)
-                            .lineLimit(1)
-
-                        Spacer()
-
-                        Text(app.formattedTime)
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                    }
-                }
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .padding(.leading, 40) // Indent to align with content after avatar
-        .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(Color.white.opacity(0.02))
-        )
     }
 
     // MARK: - Helpers
@@ -309,16 +225,6 @@ struct FriendRow: View {
         timestamp: Date()
     )
 
-    let sampleTimeline = TimelineData(
-        apps: [
-            AppTimelineEntry(appName: "Xcode", bundleId: "com.apple.dt.Xcode", totalTime: 7200, color: .blue, percentage: 0.4),
-            AppTimelineEntry(appName: "Safari", bundleId: "com.apple.Safari", totalTime: 5400, color: .green, percentage: 0.3),
-            AppTimelineEntry(appName: "Slack", bundleId: "com.tinyspeck.slackmacgap", totalTime: 3600, color: .purple, percentage: 0.2)
-        ],
-        totalTime: 16200,
-        insights: []
-    )
-
     VStack(spacing: 0) {
         // Online with activity - SAME APP as user (highlighted with "Together" badge)
         FriendRow(
@@ -329,7 +235,6 @@ struct FriendRow: View {
                 currentActivity: sampleActivity,
                 currentlyWith: ["Alice", "Carol"]
             ),
-            timelineData: sampleTimeline,
             currentUserActivity: currentUserActivity
         )
 

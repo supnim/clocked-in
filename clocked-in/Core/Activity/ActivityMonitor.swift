@@ -8,9 +8,6 @@ final class ActivityMonitor {
     @ObservationIgnored
     nonisolated(unsafe) private var debounceTask: Task<Void, Never>?
 
-    // Session manager for handling activity changes
-    private weak var sessionManager: ActivitySessionManager?
-
     var currentActivity: Activity?
 
     init() {
@@ -20,16 +17,6 @@ final class ActivityMonitor {
             name: NSWorkspace.didActivateApplicationNotification,
             object: nil
         )
-
-        // Connect to session manager on app launch
-        Task { @MainActor in
-            connectToSessionManager(ActivitySessionManager.shared)
-        }
-    }
-
-    // Connect to session manager for activity tracking
-    private func connectToSessionManager(_ sessionManager: ActivitySessionManager) {
-        self.sessionManager = sessionManager
     }
 
     deinit {
@@ -67,10 +54,7 @@ final class ActivityMonitor {
 
                  currentActivity = activity
 
-                 // Notify session manager of activity change (creates sessions)
-                 await sessionManager?.handleActivityChange(activity)
-
-                 // Notify presence manager of activity change (updates Realtime DB)
+                 // Notify presence manager of activity change (syncs to backend)
                  await PresenceManager.shared.updatePresence(for: activity)
             }
         }
