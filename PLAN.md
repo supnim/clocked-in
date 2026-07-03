@@ -10,7 +10,7 @@ A macOS presence app that lives in the notch, showing friends what you're workin
 
 | Topic | Decision |
 |-------|----------|
-| **Auth** | Username to start (Google auth available but simpler with handle) |
+| **Auth** | ~~Username to start (Google auth available but simpler with handle)~~ **Shipped differently:** device-UUID generated on first run and registered with the backend immediately; username is picked *after* that (still blocking, but no longer the very first step). See "Shipped Differently" below. |
 | **Identity** | UUID (permanent) + username (changeable handle) |
 | **Username rules** | 3-20 chars, `a-z`, `0-9`, `_`, lowercase only |
 | **Display name** | Username IS the display name (no separate field) |
@@ -18,13 +18,10 @@ A macOS presence app that lives in the notch, showing friends what you're workin
 | **Username validation** | On blur / submit only (not real-time debounce) |
 | **Force username** | Can't use app until username is picked (notch stays closed) |
 | **Idle → Away** | 15 minutes of inactivity |
-| **Timeline expand** | Accordion (inline expand in list) |
-| **Timeline periods** | Today / Week / Month toggle |
 | **Custom status** | Yes, user can set their own status message |
 | **Notifications** | Show actual app icons, silent (no sound) |
 | **Notification duration** | 3 seconds, latest only (no queue) |
 | **Tap notification** | Opens that friend's expanded view |
-| **History depth** | 30 days raw, then merge into daily summaries |
 | **Friend limits** | Unlimited, scrollable list |
 | **Friend model** | Mutual (request → accept) |
 | **Friend visibility** | Only after both accept |
@@ -40,6 +37,24 @@ A macOS presence app that lives in the notch, showing friends what you're workin
 | **Account deletion** | Not in MVP |
 | **First friend** | Simple "You're connected!" toast |
 | **App icon storage** | Cache locally + sync base64 to Firebase |
+
+---
+
+## Shipped Differently
+
+A few decisions above changed shape during implementation:
+
+- **Auth is device-UUID-first, not username-first.** On first launch the app
+  generates a UUID, stores it in Keychain, and registers it with the backend
+  (`POST /auth/device`) before any username exists. The username picker still
+  blocks the notch afterward — see `Force username` above — but it's the
+  second step, not the first.
+- **Google auth is browser-redirect OAuth, not in-app.** `GET /auth/google`
+  redirects to Google's consent screen; `GET /auth/callback` handles the
+  exchange and redirects back into the app via `clockedin://auth?token=...`.
+  It is not a native in-app sign-in sheet.
+- **Timeline / history features were cut from v1** — see the "v1.1 /
+  Post-launch" section near the end of this document.
 
 ---
 
@@ -152,16 +167,8 @@ On app launch:
 3. Log warning for debugging
 
 #### Activity Aggregation (30-day rule)
-Run on app launch (or daily background task):
-```
-1. Query sessions older than 30 days
-2. Group by date (YYYY-MM-DD in user's timezone)
-3. For each date:
-   - Group by bundleId
-   - Sum durations
-   - Create DailySummary document
-4. Delete raw sessions older than 30 days
-```
+**Cut from v1 — moved to "v1.1 / Post-launch" section.** This only matters
+once the Timeline feature exists to consume it.
 
 ---
 
@@ -456,137 +463,7 @@ DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
 
 ---
 
-### 7. Timeline Feature
-
-#### Timeline Data Query
-```swift
-func getTimeline(for uid: String, period: TimelinePeriod) async throws -> TimelineData {
-    let calendar = Calendar.current
-    let now = Date()
-
-    let (startDate, endDate): (Date, Date) = switch period {
-    case .today:
-        (calendar.startOfDay(for: now), now)
-    case .week:
-        (calendar.date(byAdding: .day, value: -7, to: now)!, now)
-    case .month:
-        (calendar.date(byAdding: .day, value: -30, to: now)!, now)
-    }
-
-    // Query raw sessions for recent data (< 30 days)
-    let sessions = try await queryActivitySessions(
-        uid: uid,
-        from: startDate,
-        to: endDate
-    )
-
-    // Query summaries for older data (> 30 days, if month view)
-    var summaries: [DailySummary] = []
-    if period == .month {
-        summaries = try await querySummaries(uid: uid, from: startDate, to: endDate)
-    }
-
-    // Aggregate into timeline data
-    return aggregateTimeline(sessions: sessions, summaries: summaries)
-}
-```
-
-#### Timeline Aggregation
-```swift
-struct TimelineData {
-    var apps: [AppTimelineEntry]  // Sorted by total time desc
-    var totalTime: TimeInterval
-
-    struct AppTimelineEntry {
-        let appName: String
-        let bundleId: String
-        let totalTime: TimeInterval
-        let color: Color
-        let percentage: Double
-    }
-}
-
-func aggregateTimeline(sessions: [ActivitySession], summaries: [DailySummary]) -> TimelineData {
-    var appTimes: [String: (name: String, time: TimeInterval)] = [:]
-
-    // Add session times
-    for session in sessions {
-        let duration = session.duration
-        appTimes[session.bundleId, default: (session.appName, 0)].time += duration
-    }
-
-    // Add summary times
-    for summary in summaries {
-        for app in summary.apps {
-            appTimes[app.bundleId, default: (app.appName, 0)].time += app.totalTime
-        }
-    }
-
-    let totalTime = appTimes.values.reduce(0) { $0 + $1.time }
-
-    let apps = appTimes.map { bundleId, data in
-        AppTimelineEntry(
-            appName: data.name,
-            bundleId: bundleId,
-            totalTime: data.time,
-            color: colorForBundleId(bundleId),
-            percentage: totalTime > 0 ? data.time / totalTime : 0
-        )
-    }.sorted { $0.totalTime > $1.totalTime }
-
-    return TimelineData(apps: apps, totalTime: totalTime)
-}
-```
-
-#### Bundle ID → Color
-```swift
-func colorForBundleId(_ bundleId: String) -> Color {
-    // Create stable hash
-    var hasher = Hasher()
-    hasher.combine(bundleId)
-    let hash = abs(hasher.finalize())
-
-    // Map to hue (0-360)
-    let hue = Double(hash % 360) / 360.0
-
-    // Fixed saturation and brightness for consistency
-    return Color(hue: hue, saturation: 0.65, brightness: 0.75)
-}
-```
-
-#### Timeline Bar Component
-```swift
-struct TimelineBar: View {
-    let data: TimelineData
-    let height: CGFloat = 24
-
-    var body: some View {
-        GeometryReader { geometry in
-            HStack(spacing: 1) {
-                ForEach(data.apps.prefix(10), id: \.bundleId) { app in
-                    Rectangle()
-                        .fill(app.color)
-                        .frame(width: geometry.size.width * app.percentage)
-                }
-
-                // "Other" category if more than 10 apps
-                if data.apps.count > 10 {
-                    let otherPercentage = data.apps.dropFirst(10).reduce(0) { $0 + $1.percentage }
-                    Rectangle()
-                        .fill(Color.gray)
-                        .frame(width: geometry.size.width * otherPercentage)
-                }
-            }
-        }
-        .frame(height: height)
-        .cornerRadius(4)
-    }
-}
-```
-
----
-
-### 8. Custom Status
+### 7. Custom Status
 
 #### Status in Presence
 ```swift
@@ -638,54 +515,7 @@ let statusPresets = [
 
 ---
 
-### 9. Activity Insights
-
-#### Insight Types
-```swift
-enum InsightType {
-    case moreTime(app: String, percentChange: Int)      // "40% more time in Slack"
-    case lessTime(app: String, percentChange: Int)      // "25% less time in Twitter"
-    case mostProductiveDay(day: String, hours: Double)  // "Tuesday was your most productive (9h)"
-    case newApp(app: String)                            // "New this week: Cursor"
-    case streak(days: Int)                              // "5 day streak!"
-    case totalTime(hours: Double)                       // "You tracked 42 hours this week"
-}
-```
-
-#### Insight Generation
-```swift
-func generateInsights(current: TimelineData, previous: TimelineData?) -> [Insight] {
-    var insights: [Insight] = []
-
-    guard let previous = previous else {
-        // First week, just show total
-        insights.append(.totalTime(hours: current.totalTime / 3600))
-        return insights
-    }
-
-    // Compare app times
-    for app in current.apps {
-        if let prevApp = previous.apps.first(where: { $0.bundleId == app.bundleId }) {
-            let change = (app.totalTime - prevApp.totalTime) / prevApp.totalTime
-            if change > 0.25 {
-                insights.append(.moreTime(app: app.appName, percentChange: Int(change * 100)))
-            } else if change < -0.25 {
-                insights.append(.lessTime(app: app.appName, percentChange: Int(abs(change) * 100)))
-            }
-        } else {
-            // New app
-            insights.append(.newApp(app: app.appName))
-        }
-    }
-
-    // Limit to 3 insights
-    return Array(insights.prefix(3))
-}
-```
-
----
-
-### 10. Offline Mode
+### 8. Offline Mode
 
 #### Offline Detection
 ```swift
@@ -1120,20 +950,7 @@ struct ActivitySession: Codable, Identifiable {
 }
 
 // MARK: - Daily Summary
-
-struct DailySummary: Codable, Identifiable {
-    @DocumentID var id: String?     // Format: "YYYY-MM-DD"
-    let date: String
-    var apps: [AppSummary]
-    var totalTime: TimeInterval
-}
-
-struct AppSummary: Codable {
-    let appName: String
-    let bundleId: String
-    var totalTime: TimeInterval
-    var sessionCount: Int
-}
+// Cut from v1 along with the Timeline feature — see "v1.1 / Post-launch" below.
 
 // MARK: - Friendship
 
@@ -1187,60 +1004,9 @@ struct PrivacySettings: Codable {
     )
 }
 
-// MARK: - Timeline
-
-struct TimelineData {
-    var apps: [AppTimelineEntry]
-    var totalTime: TimeInterval
-    var insights: [Insight]
-}
-
-struct AppTimelineEntry: Identifiable {
-    let appName: String
-    let bundleId: String
-    let totalTime: TimeInterval
-    let color: Color
-    let percentage: Double
-
-    var id: String { bundleId }
-}
-
-enum TimelinePeriod: String, CaseIterable {
-    case today = "Today"
-    case week = "Week"
-    case month = "Month"
-}
-
-// MARK: - Insights
-
-enum Insight: Identifiable {
-    case moreTime(app: String, percent: Int)
-    case lessTime(app: String, percent: Int)
-    case newApp(app: String)
-    case totalTime(hours: Double)
-
-    var id: String {
-        switch self {
-        case .moreTime(let app, _): return "more_\(app)"
-        case .lessTime(let app, _): return "less_\(app)"
-        case .newApp(let app): return "new_\(app)"
-        case .totalTime: return "total"
-        }
-    }
-
-    var message: String {
-        switch self {
-        case .moreTime(let app, let percent):
-            return "You spent \(percent)% more time in \(app) this week"
-        case .lessTime(let app, let percent):
-            return "You spent \(percent)% less time in \(app) this week"
-        case .newApp(let app):
-            return "New this week: \(app)"
-        case .totalTime(let hours):
-            return "You tracked \(String(format: "%.1f", hours)) hours this week"
-        }
-    }
-}
+// MARK: - Timeline / Insights
+// Cut from v1 — see "v1.1 / Post-launch" below for the original TimelineData,
+// AppTimelineEntry, TimelinePeriod, and Insight models.
 
 // MARK: - App Info (for hidden apps picker)
 
@@ -1351,23 +1117,7 @@ Firestore:
 6. Implement orphan session cleanup on app launch
 7. Create daily aggregation for sessions > 30 days old
 
-### Phase 3: Timeline Feature
-**Files to create/modify:**
-- `Services/Timeline/TimelineService.swift` - Query and aggregate timeline data
-- `UI/Components/TimelineBar.swift` - Stacked bar visualization
-- `UI/Views/YourTimelineView.swift` - Your activity view
-- `Utilities/ColorGenerator.swift` - Bundle ID → Color
-
-**Tasks:**
-1. Query activity sessions by date range
-2. Aggregate sessions into TimelineData (per-app totals)
-3. Implement bundle ID → HSL color generation
-4. Create TimelineBar component with colored segments
-5. Create period toggle (Today/Week/Month)
-6. Display app legend with times
-7. Generate and display insights
-
-### Phase 4: Presence & Friends
+### Phase 3: Presence & Friends
 **Files to modify:**
 - `Core/Presence/PresenceManager.swift` - Add app icon sync
 - `Core/Presence/PresenceListener.swift` - Add "currently with" detection
@@ -1382,7 +1132,7 @@ Firestore:
 5. Add custom status message support
 6. Sticky "You" row at bottom
 
-### Phase 5: Notifications
+### Phase 4: Notifications
 **Files to create/modify:**
 - `Core/Notifications/NotchNotificationManager.swift` - Notification display logic
 - `UI/Components/AppChangeNotification.swift` - Notification UI
@@ -1396,7 +1146,7 @@ Firestore:
 5. Auto-dismiss after 3 seconds
 6. Tap notification → open friend's expanded view
 
-### Phase 6: UI Polish
+### Phase 5: UI Polish
 **Files to modify:**
 - `UI/NotchContent/NotchContentView.swift` - Dynamic height
 - `UI/NotchContent/CompactNotchView.swift` - Online count, notifications
@@ -1410,7 +1160,7 @@ Firestore:
 5. Add smooth animations for all transitions
 6. Implement offline banner
 
-### Phase 7: Edge Cases & Polish
+### Phase 6: Edge Cases & Polish
 **Tasks:**
 1. Offline mode: Cache friends list, show offline banner
 2. Error handling: Show appropriate error messages
@@ -1437,12 +1187,6 @@ Firestore:
 - [ ] Idle detection triggers "Away" after 15 min
 - [ ] Hidden apps show as "Ghost Mode"
 
-### Timeline
-- [ ] Today/Week/Month periods show correct data
-- [ ] Timeline bar colors are consistent per app
-- [ ] App legend shows correct times
-- [ ] Insights generate correctly
-
 ### Friends
 - [ ] Search finds users by prefix
 - [ ] Friend request flow works (send → accept)
@@ -1460,6 +1204,305 @@ Firestore:
 - [ ] "You" row stays sticky at bottom
 - [ ] Accordion expand/collapse works
 - [ ] Offline banner shows when disconnected
+
+---
+
+## v1.1 / Post-launch
+
+The Timeline / history feature (Today/Week/Month usage timelines, accordion
+expand, 30-day history, insights) was **cut from v1**. Its code has been
+deleted (`TimelineService`, `YourTimelineView`, `ActivitySessionManager`,
+`TimelineBar`, `Models/Timeline.swift`). Everything below is preserved as the
+spec to pick back up from when this feature is revisited post-launch.
+
+### Activity Aggregation (30-day rule)
+Run on app launch (or daily background task):
+```
+1. Query sessions older than 30 days
+2. Group by date (YYYY-MM-DD in user's timezone)
+3. For each date:
+   - Group by bundleId
+   - Sum durations
+   - Create DailySummary document
+4. Delete raw sessions older than 30 days
+```
+
+### Timeline Feature
+
+#### Timeline Data Query
+```swift
+func getTimeline(for uid: String, period: TimelinePeriod) async throws -> TimelineData {
+    let calendar = Calendar.current
+    let now = Date()
+
+    let (startDate, endDate): (Date, Date) = switch period {
+    case .today:
+        (calendar.startOfDay(for: now), now)
+    case .week:
+        (calendar.date(byAdding: .day, value: -7, to: now)!, now)
+    case .month:
+        (calendar.date(byAdding: .day, value: -30, to: now)!, now)
+    }
+
+    // Query raw sessions for recent data (< 30 days)
+    let sessions = try await queryActivitySessions(
+        uid: uid,
+        from: startDate,
+        to: endDate
+    )
+
+    // Query summaries for older data (> 30 days, if month view)
+    var summaries: [DailySummary] = []
+    if period == .month {
+        summaries = try await querySummaries(uid: uid, from: startDate, to: endDate)
+    }
+
+    // Aggregate into timeline data
+    return aggregateTimeline(sessions: sessions, summaries: summaries)
+}
+```
+
+#### Timeline Aggregation
+```swift
+struct TimelineData {
+    var apps: [AppTimelineEntry]  // Sorted by total time desc
+    var totalTime: TimeInterval
+
+    struct AppTimelineEntry {
+        let appName: String
+        let bundleId: String
+        let totalTime: TimeInterval
+        let color: Color
+        let percentage: Double
+    }
+}
+
+func aggregateTimeline(sessions: [ActivitySession], summaries: [DailySummary]) -> TimelineData {
+    var appTimes: [String: (name: String, time: TimeInterval)] = [:]
+
+    // Add session times
+    for session in sessions {
+        let duration = session.duration
+        appTimes[session.bundleId, default: (session.appName, 0)].time += duration
+    }
+
+    // Add summary times
+    for summary in summaries {
+        for app in summary.apps {
+            appTimes[app.bundleId, default: (app.appName, 0)].time += app.totalTime
+        }
+    }
+
+    let totalTime = appTimes.values.reduce(0) { $0 + $1.time }
+
+    let apps = appTimes.map { bundleId, data in
+        AppTimelineEntry(
+            appName: data.name,
+            bundleId: bundleId,
+            totalTime: data.time,
+            color: colorForBundleId(bundleId),
+            percentage: totalTime > 0 ? data.time / totalTime : 0
+        )
+    }.sorted { $0.totalTime > $1.totalTime }
+
+    return TimelineData(apps: apps, totalTime: totalTime)
+}
+```
+
+#### Bundle ID → Color
+```swift
+func colorForBundleId(_ bundleId: String) -> Color {
+    // Create stable hash
+    var hasher = Hasher()
+    hasher.combine(bundleId)
+    let hash = abs(hasher.finalize())
+
+    // Map to hue (0-360)
+    let hue = Double(hash % 360) / 360.0
+
+    // Fixed saturation and brightness for consistency
+    return Color(hue: hue, saturation: 0.65, brightness: 0.75)
+}
+```
+
+#### Timeline Bar Component
+```swift
+struct TimelineBar: View {
+    let data: TimelineData
+    let height: CGFloat = 24
+
+    var body: some View {
+        GeometryReader { geometry in
+            HStack(spacing: 1) {
+                ForEach(data.apps.prefix(10), id: \.bundleId) { app in
+                    Rectangle()
+                        .fill(app.color)
+                        .frame(width: geometry.size.width * app.percentage)
+                }
+
+                // "Other" category if more than 10 apps
+                if data.apps.count > 10 {
+                    let otherPercentage = data.apps.dropFirst(10).reduce(0) { $0 + $1.percentage }
+                    Rectangle()
+                        .fill(Color.gray)
+                        .frame(width: geometry.size.width * otherPercentage)
+                }
+            }
+        }
+        .frame(height: height)
+        .cornerRadius(4)
+    }
+}
+```
+
+### Activity Insights
+
+#### Insight Types
+```swift
+enum InsightType {
+    case moreTime(app: String, percentChange: Int)      // "40% more time in Slack"
+    case lessTime(app: String, percentChange: Int)      // "25% less time in Twitter"
+    case mostProductiveDay(day: String, hours: Double)  // "Tuesday was your most productive (9h)"
+    case newApp(app: String)                            // "New this week: Cursor"
+    case streak(days: Int)                              // "5 day streak!"
+    case totalTime(hours: Double)                       // "You tracked 42 hours this week"
+}
+```
+
+#### Insight Generation
+```swift
+func generateInsights(current: TimelineData, previous: TimelineData?) -> [Insight] {
+    var insights: [Insight] = []
+
+    guard let previous = previous else {
+        // First week, just show total
+        insights.append(.totalTime(hours: current.totalTime / 3600))
+        return insights
+    }
+
+    // Compare app times
+    for app in current.apps {
+        if let prevApp = previous.apps.first(where: { $0.bundleId == app.bundleId }) {
+            let change = (app.totalTime - prevApp.totalTime) / prevApp.totalTime
+            if change > 0.25 {
+                insights.append(.moreTime(app: app.appName, percentChange: Int(change * 100)))
+            } else if change < -0.25 {
+                insights.append(.lessTime(app: app.appName, percentChange: Int(abs(change) * 100)))
+            }
+        } else {
+            // New app
+            insights.append(.newApp(app: app.appName))
+        }
+    }
+
+    // Limit to 3 insights
+    return Array(insights.prefix(3))
+}
+```
+
+### Data Models
+
+```swift
+// MARK: - Daily Summary
+
+struct DailySummary: Codable, Identifiable {
+    @DocumentID var id: String?     // Format: "YYYY-MM-DD"
+    let date: String
+    var apps: [AppSummary]
+    var totalTime: TimeInterval
+}
+
+struct AppSummary: Codable {
+    let appName: String
+    let bundleId: String
+    var totalTime: TimeInterval
+    var sessionCount: Int
+}
+
+// MARK: - Timeline
+
+struct TimelineData {
+    var apps: [AppTimelineEntry]
+    var totalTime: TimeInterval
+    var insights: [Insight]
+}
+
+struct AppTimelineEntry: Identifiable {
+    let appName: String
+    let bundleId: String
+    let totalTime: TimeInterval
+    let color: Color
+    let percentage: Double
+
+    var id: String { bundleId }
+}
+
+enum TimelinePeriod: String, CaseIterable {
+    case today = "Today"
+    case week = "Week"
+    case month = "Month"
+}
+
+// MARK: - Insights
+
+enum Insight: Identifiable {
+    case moreTime(app: String, percent: Int)
+    case lessTime(app: String, percent: Int)
+    case newApp(app: String)
+    case totalTime(hours: Double)
+
+    var id: String {
+        switch self {
+        case .moreTime(let app, _): return "more_\(app)"
+        case .lessTime(let app, _): return "less_\(app)"
+        case .newApp(let app): return "new_\(app)"
+        case .totalTime: return "total"
+        }
+    }
+
+    var message: String {
+        switch self {
+        case .moreTime(let app, let percent):
+            return "You spent \(percent)% more time in \(app) this week"
+        case .lessTime(let app, let percent):
+            return "You spent \(percent)% less time in \(app) this week"
+        case .newApp(let app):
+            return "New this week: \(app)"
+        case .totalTime(let hours):
+            return "You tracked \(String(format: "%.1f", hours)) hours this week"
+        }
+    }
+}
+```
+
+### Implementation Phase (originally Phase 3)
+**Files to create/modify:**
+- `Services/Timeline/TimelineService.swift` - Query and aggregate timeline data
+- `UI/Components/TimelineBar.swift` - Stacked bar visualization
+- `UI/Views/YourTimelineView.swift` - Your activity view
+- `Utilities/ColorGenerator.swift` - Bundle ID → Color
+
+**Tasks:**
+1. Query activity sessions by date range
+2. Aggregate sessions into TimelineData (per-app totals)
+3. Implement bundle ID → HSL color generation
+4. Create TimelineBar component with colored segments
+5. Create period toggle (Today/Week/Month)
+6. Display app legend with times
+7. Generate and display insights
+
+### Decisions (for reference)
+| Topic | Decision |
+|-------|----------|
+| **Timeline expand** | Accordion (inline expand in list) |
+| **Timeline periods** | Today / Week / Month toggle |
+| **History depth** | 30 days raw, then merge into daily summaries |
+
+### Testing Checklist
+- [ ] Today/Week/Month periods show correct data
+- [ ] Timeline bar colors are consistent per app
+- [ ] App legend shows correct times
+- [ ] Insights generate correctly
 
 ---
 

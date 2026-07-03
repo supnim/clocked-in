@@ -7,7 +7,8 @@ A macOS presence app that lives in the notch/menu bar, showing friends what you'
 - **Swift 6**, macOS 15+ (targeting macOS 26 Liquid Glass)
 - **SwiftUI + AppKit** interop for notch/system integration
 - **@Observable macro** (NOT ObservableObject) for state management
-- **Custom Backend**: Postgres (profiles/friends), Redis (presence), Google Sign-In (OAuth)
+- **Custom Backend**: FastAPI, Postgres 18 (profiles/friends), Redis (presence, 45s TTL)
+- **Auth**: device-UUID on first run (primary), with optional Apple Sign-In and Google OAuth (browser-redirect) for account linking
 - **XcodeBuildMCP** for builds - use MCP tools, not raw xcodebuild
 
 ## Architecture
@@ -18,13 +19,13 @@ A macOS presence app that lives in the notch/menu bar, showing friends what you'
 NotchViewModel (state machine)
 ├── States: closed → opened → popping
 ├── Open reasons: click, hover, notification, boot
-└── Content: lobby, settings, addFriend, pendingRequests, friendDetail
+└── Content: usernamePicker, lobby, settings, addFriend, pendingRequests, friendDetail
 
 Data Flow:
-ActivityMonitor → PresenceManager → APIClient → PresenceListener → UI
+ActivityMonitor → PresenceManager → WebSocketClient → PresenceListener → UI
 ```
 
-**Singletons**: `AuthService.shared`, `PresenceManager.shared`, `FriendService.shared`, `APIClient.shared`
+**Singletons**: `AuthManager.shared`, `PresenceManager.shared`, `FriendService.shared`, `APIClient.shared`
 
 ## Directory Structure
 
@@ -36,11 +37,15 @@ clocked-in/
 │   ├── Events/            # Global mouse/keyboard tracking
 │   ├── Friends/           # Invite link generation
 │   ├── Notch/             # ViewModel, geometry, window controller
-│   └── Presence/          # Presence sync via API
+│   ├── Notifications/     # Notch-specific notification manager
+│   └── Presence/          # Presence sync via WebSocket
 ├── Models/                # User, Activity, FriendPresence, AppSettings
 ├── Services/
-│   ├── API/               # APIClient, AuthService, FriendService
-│   └── Notifications/     # macOS notification handling
+│   ├── API/               # APIClient
+│   ├── Auth/              # AuthManager, IdentityService, UsernameService, AppleSignInService
+│   ├── Friends/           # FriendService
+│   ├── Notifications/     # macOS notification handling
+│   └── WebSocket/         # WebSocketClient
 ├── UI/
 │   ├── Components/        # Reusable: ActionButton, FriendRow, PresenceIndicator
 │   ├── NotchContent/      # CompactNotchView, ExpandedNotchView
@@ -69,7 +74,7 @@ final class MyViewModel {
 @Bindable var viewModel: MyViewModel
 
 // Environment injection
-@Environment(AuthService.self) var auth
+@Environment(AuthManager.self) var auth
 ```
 
 ### Async/Await Over Callbacks
@@ -110,27 +115,23 @@ func handleActivityChange(_ activity: Activity) {
 
 ### Presence Updates
 ```swift
-// Use WebSocket for real-time presence, HTTP for updates
-func setOnline() async throws {
-    try await APIClient.shared.updatePresence(online: true)
-}
+// Real-time presence goes over WebSocket, not HTTP
+await WebSocketClient.shared.sendPresenceUpdate(activity, status: "online")
 ```
 
 ### Friend Queries
 ```swift
-// Friend lookup by user ID
-let friends = try await APIClient.shared.getFriends(userId: userId)
+// Friends list (current user, scoped by auth token)
+let friends = try await FriendService.shared.getFriends()
 ```
 
 ## Build Commands
 
-**Use XcodeBuildMCP tools**, not raw xcodebuild:
+This is a macOS app (not iOS), so build for `macosx`, not a simulator. Prefer
+XcodeBuildMCP's macOS tools when available; otherwise raw `xcodebuild`:
 
 ```bash
-# These are available as MCP tools:
-mcp__xcodebuildmcp__build_sim_name_proj      # Build for simulator
-mcp__xcodebuildmcp__test_sim_name_proj       # Run tests
-mcp__xcodebuildmcp__build_run_sim_name_proj  # Build and run
+xcodebuild -project clocked-in.xcodeproj -scheme clocked-in build
 ```
 
 Or use slash commands: `/project:build`, `/project:test`, `/project:run`
@@ -161,15 +162,13 @@ ToolbarSpacer(.flexible)
 | Browser URLs | `Core/Activity/BrowserURLFetcher.swift` |
 | Presence sync | `Core/Presence/PresenceManager.swift` |
 | Friend updates | `Core/Presence/PresenceListener.swift` |
-| Auth flow | `Services/API/AuthService.swift` |
+| Auth flow | `Services/Auth/AuthManager.swift` |
 | Deep links | `Utilities/DeepLinkHandler.swift` |
 
 ## Testing
 
-- Unit tests for ViewModels and Services
-- Mock APIClient with protocol conformance
-- Test state machine transitions
-- Test debounce behavior with Task cancellation
+- Test harness: pytest (backend) + XCTest (client) — minimal, being added
+- Aspirational conventions once tests exist: mock `APIClient` with protocol conformance, test state machine transitions, test debounce behavior with `Task` cancellation
 
 ## Important Notes
 
