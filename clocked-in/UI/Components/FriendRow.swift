@@ -3,6 +3,8 @@ import SwiftUI
 struct FriendRow: View {
     let presence: FriendPresence
     var onTap: (() -> Void)? = nil
+    var onNudge: (() -> Void)? = nil
+    var onRemove: (() -> Void)? = nil
     var timelineData: TimelineData? = nil
 
     /// Current user's activity for highlight comparison
@@ -44,7 +46,7 @@ struct FriendRow: View {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 4) {
                         Text(presence.user.name)
-                            .font(.system(size: 13, weight: .medium))
+                            .font(.subheadline.weight(.medium))
                             .foregroundColor(.primary)
 
                         PresenceIndicator(status: presence.status)
@@ -59,10 +61,10 @@ struct FriendRow: View {
                     if let statusMessage = presence.user.statusMessage, !statusMessage.isEmpty {
                         HStack(spacing: 4) {
                             Image(systemName: "text.bubble")
-                                .font(.system(size: 9))
+                                .font(.caption2)
                                 .foregroundColor(.secondary.opacity(0.7))
                             Text(statusMessage)
-                                .font(.system(size: 11))
+                                .font(.caption2)
                                 .foregroundColor(.secondary)
                                 .lineLimit(1)
                         }
@@ -75,15 +77,15 @@ struct FriendRow: View {
                                 AppIconView(iconData: activity.appIcon, size: CGSize(width: 14, height: 14))
 
                                 Text(activity.appName)
-                                    .font(.system(size: 11))
+                                    .font(.caption2)
                                     .foregroundColor(.secondary)
 
                                 if let windowTitle = activity.windowTitle {
                                     Text(".")
-                                        .font(.system(size: 11))
+                                        .font(.caption2)
                                         .foregroundColor(.secondary)
                                     Text(windowTitle)
-                                        .font(.system(size: 11))
+                                        .font(.caption2)
                                         .foregroundColor(.secondary)
                                         .lineLimit(1)
                                 }
@@ -92,14 +94,14 @@ struct FriendRow: View {
                             // Browser domain display
                             if let browserDomain = activity.browserDomain, !browserDomain.isEmpty {
                                 Text(browserDomain)
-                                    .font(.system(size: 10, design: .monospaced))
-                                    .foregroundColor(.blue.opacity(0.8))
+                                    .font(.caption2.monospaced())
+                                    .foregroundColor(.accentColor.opacity(0.8))
                                     .lineLimit(1)
                             }
                         }
                     } else if presence.status == .offline {
                         Text("Last seen \(presence.lastSeen.relativeTimeString())")
-                            .font(.system(size: 11))
+                            .font(.caption2)
                             .foregroundColor(.secondary)
                     }
 
@@ -139,6 +141,13 @@ struct FriendRow: View {
             .onTapGesture {
                 onTap?()
             }
+            .accessibilityLabel("\(presence.user.name), \(presence.status.accessibilityDescription)")
+            .contextMenu {
+                Button("View Profile") { onTap?() }
+                Button("Nudge") { onNudge?() }
+                Divider()
+                Button("Remove Friend", role: .destructive) { onRemove?() }
+            }
 
             // Expanded content with timeline
             if isExpanded, let data = timelineData {
@@ -155,11 +164,11 @@ struct FriendRow: View {
     private func currentlyWithView(names: [String]) -> some View {
         HStack(spacing: 4) {
             Image(systemName: "person.2.fill")
-                .font(.system(size: 9))
+                .font(.caption2)
                 .foregroundColor(isInSameApp ? .green : .secondary)
 
             Text("Working with \(formatNames(names))")
-                .font(.system(size: 10, weight: isInSameApp ? .medium : .regular))
+                .font(.caption2.weight(isInSameApp ? .medium : .regular))
                 .foregroundStyle(isInSameApp ? Color.green : Color.secondary)
                 .lineLimit(1)
         }
@@ -171,9 +180,9 @@ struct FriendRow: View {
     private var workingTogetherBadge: some View {
         HStack(spacing: 3) {
             Image(systemName: "sparkles")
-                .font(.system(size: 8))
+                .font(.caption2)
             Text("Together")
-                .font(.system(size: 9, weight: .semibold))
+                .font(.caption2.weight(.semibold))
         }
         .foregroundColor(.green)
         .padding(.horizontal, 6)
@@ -182,6 +191,7 @@ struct FriendRow: View {
             Capsule()
                 .fill(Color.green.opacity(0.15))
         )
+        .accessibilityLabel("Working together")
     }
 
     private var expandButton: some View {
@@ -193,9 +203,9 @@ struct FriendRow: View {
         } label: {
             HStack(spacing: 2) {
                 Text(isExpanded ? "Less" : "More")
-                    .font(.system(size: 10, weight: .medium))
+                    .font(.caption2.weight(.medium))
                 Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                    .font(.system(size: 8, weight: .semibold))
+                    .font(.caption2.weight(.semibold))
             }
             .foregroundColor(.secondary)
             .padding(.horizontal, 6)
@@ -214,7 +224,7 @@ struct FriendRow: View {
             // Timeline bar
             VStack(alignment: .leading, spacing: 6) {
                 Text("Today's Activity")
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.caption2.weight(.medium))
                     .foregroundColor(.secondary)
 
                 TimelineBar(data: data)
@@ -230,13 +240,13 @@ struct FriendRow: View {
                             .frame(width: 6, height: 6)
 
                         Text(app.appName)
-                            .font(.system(size: 11))
+                            .font(.caption2)
                             .lineLimit(1)
 
                         Spacer()
 
                         Text(app.formattedTime)
-                            .font(.system(size: 10))
+                            .font(.caption2)
                             .foregroundColor(.secondary)
                     }
                 }

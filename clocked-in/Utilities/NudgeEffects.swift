@@ -1,11 +1,13 @@
 import AppKit
 import AVFoundation
 import UserNotifications
+import OSLog
 
 @MainActor
 final class NudgeEffects {
     static let shared = NudgeEffects()
 
+    private let log = Logger(subsystem: "com.clockedin", category: "NudgeEffects")
     private var audioPlayer: AVAudioPlayer?
 
     private init() {
@@ -57,19 +59,14 @@ final class NudgeEffects {
                 let decay = CGFloat(shakeCount - i) / CGFloat(shakeCount)
                 let offset = shakeIntensity * direction * decay
 
-                await MainActor.run {
-                    var newFrame = originalFrame
-                    newFrame.origin.x += offset
-                    window.setFrame(newFrame, display: false)
-                }
+                var newFrame = originalFrame
+                newFrame.origin.x += offset
+                window.setFrame(newFrame, display: false)
 
                 try? await Task.sleep(for: .seconds(shakeDuration / Double(shakeCount)))
             }
 
-            // Reset to original position
-            await MainActor.run {
-                window.setFrame(originalFrame, display: false)
-            }
+            window.setFrame(originalFrame, display: false)
         }
     }
 
@@ -109,7 +106,7 @@ final class NudgeEffects {
         do {
             try await center.requestAuthorization(options: [.alert, .sound, .badge])
         } catch {
-            print("Failed to request notification permission: \(error)")
+            log.error("Failed to request notification permission: \(error)")
         }
     }
 
@@ -128,7 +125,7 @@ final class NudgeEffects {
 
         UNUserNotificationCenter.current().add(request) { error in
             if let error = error {
-                print("Failed to show nudge notification: \(error)")
+                self.log.error("Failed to show nudge notification: \(error)")
             }
         }
     }

@@ -12,19 +12,21 @@ struct AvatarView: View {
             AsyncImage(url: url) { image in
                 image.resizable()
             } placeholder: {
-                Circle().fill(Color.blue.opacity(0.3))
+                Circle().fill(Color.accentColor.opacity(0.3))
             }
             .frame(width: size, height: size)
             .clipShape(Circle())
+            .accessibilityLabel("Avatar for \(displayName)")
         } else {
             Circle()
-                .fill(Color.blue.opacity(0.3))
+                .fill(Color.accentColor.opacity(0.3))
                 .frame(width: size, height: size)
                 .overlay(
                     Text(displayName.prefix(1).uppercased())
                         .font(.system(size: size * 0.4, weight: .medium))
                         .foregroundColor(.white)
                 )
+                .accessibilityLabel("Avatar for \(displayName)")
         }
     }
 }

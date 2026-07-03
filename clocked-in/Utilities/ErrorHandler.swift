@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import OSLog
 
 // MARK: - App Error Types
 
@@ -214,6 +215,7 @@ final class ErrorHandler {
     /// Callback for when auth errors require sign-out
     var onAuthFailure: (() -> Void)?
 
+    private let log = Logger(subsystem: "com.clockedin", category: "ErrorHandler")
     private var autoDismissTask: Task<Void, Never>?
 
     private init() {}
@@ -256,9 +258,7 @@ final class ErrorHandler {
             autoDismissTask = Task {
                 try? await Task.sleep(for: .seconds(4))
                 guard !Task.isCancelled else { return }
-                await MainActor.run {
-                    self.dismiss()
-                }
+                self.dismiss()
             }
         }
     }
@@ -275,9 +275,9 @@ final class ErrorHandler {
 
     private func logError(_ error: AppError, context: String) {
         let contextPrefix = context.isEmpty ? "" : "[\(context)] "
-        print("\(contextPrefix)Error: \(error.localizedDescription)")
+        log.error("\(contextPrefix)Error: \(error.localizedDescription)")
         if let suggestion = error.recoverySuggestion {
-            print("\(contextPrefix)Recovery: \(suggestion)")
+            log.info("\(contextPrefix)Recovery: \(suggestion)")
         }
     }
 

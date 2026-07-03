@@ -1,8 +1,13 @@
 import SwiftUI
 
 struct CompactNotchView: View {
+    let viewModel: NotchViewModel
+    let presenceListener: PresenceListener
+    let networkMonitor: NetworkMonitor
+    let notificationManager: NotchNotificationManager
+
     private var onlineFriends: [FriendPresence] {
-        PresenceListener.shared.friendsPresence.filter { $0.status != .offline }
+        presenceListener.friendsPresence.filter { $0.status != .offline }
     }
 
     private var onlineCount: Int {
@@ -19,11 +24,11 @@ struct CompactNotchView: View {
 
     /// Whether to show offline/reconnecting banner
     private var showOfflineBanner: Bool {
-        NetworkMonitor.shared.connectionState.isOffline
+        networkMonitor.connectionState.isOffline
     }
 
     private var currentNotification: FriendActivityNotification? {
-        NotchNotificationManager.shared.currentNotification
+        notificationManager.currentNotification
     }
 
     var body: some View {
@@ -39,12 +44,27 @@ struct CompactNotchView: View {
 
                     if onlineCount > 0 {
                         Text("\(onlineCount)")
-                            .font(.system(size: 11, weight: .medium))
+                            .font(.caption2.weight(.medium))
                             .foregroundColor(.white)
                     }
                 }
             }
             .opacity(onlineCount > 0 || showOfflineBanner ? 1.0 : 0.5)
+
+            // Quick-pop notification overlay
+            if let quickPop = viewModel.quickPopNotification {
+                HStack(spacing: 6) {
+                    Text(quickPop.friend.user.username)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundColor(.white)
+                    if let newApp = quickPop.newApp {
+                        Text("→ \(newApp)")
+                            .font(.caption2)
+                            .foregroundColor(.white.opacity(0.7))
+                    }
+                }
+                .transition(.opacity)
+            }
 
             // Notification overlay - observes NotchNotificationManager
             if let notification = currentNotification {
@@ -53,19 +73,23 @@ struct CompactNotchView: View {
                     AppChangeNotification(
                         friend: notification.friend,
                         oldAppIcon: notification.oldAppIcon,
-                        newAppIcon: notification.newAppIcon
+                        newAppIcon: notification.newAppIcon,
+                        onTapFriend: { friend in
+                            viewModel.showContent(.friendDetail(friend.uid))
+                        }
                     )
                     .transition(.move(edge: .top).combined(with: .opacity))
                 }
             }
         }
         .animation(.easeInOut(duration: 0.2), value: currentNotification != nil)
+        .animation(.easeInOut(duration: 0.2), value: viewModel.quickPopNotification != nil)
         .animation(.easeInOut(duration: 0.3), value: showOfflineBanner)
         .onAppear {
-            PresenceListener.shared.startListening()
+            presenceListener.startListening()
         }
         .onDisappear {
-            PresenceListener.shared.stopListening()
+            presenceListener.stopListening()
         }
     }
 }

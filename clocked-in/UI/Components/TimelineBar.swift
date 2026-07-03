@@ -43,13 +43,13 @@ struct TimelineLegend: View {
                         .frame(width: 8, height: 8)
 
                     Text(app.appName)
-                        .font(.system(size: 12))
+                        .font(.caption)
                         .lineLimit(1)
 
                     Spacer()
 
                     Text(app.formattedTime)
-                        .font(.system(size: 11))
+                        .font(.caption2)
                         .foregroundColor(.secondary)
                 }
             }
@@ -64,12 +64,12 @@ struct TimelineLegend: View {
                         .frame(width: 8, height: 8)
 
                     Text("Other")
-                        .font(.system(size: 12))
+                        .font(.caption)
 
                     Spacer()
 
                     Text(formatDuration(otherTime))
-                        .font(.system(size: 11))
+                        .font(.caption2)
                         .foregroundColor(.secondary)
                 }
             }
@@ -93,17 +93,21 @@ struct TimelineInsightsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("💡 Insights")
-                .font(.system(size: 14, weight: .semibold))
+            HStack(spacing: 4) {
+                Image(systemName: "lightbulb")
+                    .font(.subheadline.weight(.semibold))
+                Text("Insights")
+                    .font(.subheadline.weight(.semibold))
+            }
 
             ForEach(insights) { insight in
                 HStack(spacing: 8) {
                     Image(systemName: insight.icon)
                         .foregroundColor(insight.color)
-                        .font(.system(size: 12))
+                        .font(.caption)
 
                     Text(insight.message)
-                        .font(.system(size: 12))
+                        .font(.caption)
                         .foregroundColor(.secondary)
                         .lineLimit(2)
                 }
@@ -111,7 +115,7 @@ struct TimelineInsightsView: View {
 
             if insights.isEmpty {
                 Text("Keep using Clocked-In to see insights about your activity patterns!")
-                    .font(.system(size: 12))
+                    .font(.caption)
                     .foregroundColor(.secondary)
                     .italic()
             }

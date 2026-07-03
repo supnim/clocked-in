@@ -4,6 +4,13 @@ struct NotchContentView: View {
     @Bindable var viewModel: NotchViewModel
     @State private var isHovering = false
 
+    private enum AnimationConstants {
+        static let hoverSpring = Animation.spring(response: 0.38, dampingFraction: 0.8)
+        static let statusSpring = Animation.spring(response: 0.35, dampingFraction: 0.8)
+        static let insertionAnimation = Animation.smooth(duration: 0.35)
+        static let removalAnimation = Animation.easeOut(duration: 0.15)
+    }
+
     private let cornerRadiusInsets = (
         opened: (top: CGFloat(19), bottom: CGFloat(24)),
         closed: (top: CGFloat(6), bottom: CGFloat(14))
@@ -58,10 +65,10 @@ struct NotchContentView: View {
                         maxHeight: viewModel.status == .opened ? notchSize.height : nil,
                         alignment: .top
                     )
-                    .animation(.spring(response: 0.35, dampingFraction: 0.8), value: viewModel.status)
+                    .animation(AnimationConstants.statusSpring, value: viewModel.status)
                     .contentShape(Rectangle())
                     .onHover { hovering in
-                        withAnimation(.spring(response: 0.38, dampingFraction: 0.8)) {
+                        withAnimation(AnimationConstants.hoverSpring) {
                             isHovering = hovering
                         }
                     }
@@ -100,8 +107,8 @@ struct NotchContentView: View {
                         .asymmetric(
                             insertion: .scale(scale: 0.8, anchor: .top)
                                 .combined(with: .opacity)
-                                .animation(.smooth(duration: 0.35)),
-                            removal: .opacity.animation(.easeOut(duration: 0.15))
+                                .animation(AnimationConstants.insertionAnimation),
+                            removal: .opacity.animation(AnimationConstants.removalAnimation)
                         )
                     )
             }
@@ -114,7 +121,7 @@ struct NotchContentView: View {
             if viewModel.status == .opened {
                 HStack(spacing: 8) {
                     Text(headerTitle)
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.footnote.weight(.semibold))
                         .foregroundColor(.white.opacity(0.9))
 
                     Spacer()
@@ -143,8 +150,13 @@ struct NotchContentView: View {
                 }
                 .padding(.horizontal, 8)
             } else {
-                CompactNotchView()
-                    .frame(width: closedNotchSize.width, height: closedNotchSize.height)
+                CompactNotchView(
+                    viewModel: viewModel,
+                    presenceListener: PresenceListener.shared,
+                    networkMonitor: NetworkMonitor.shared,
+                    notificationManager: NotchNotificationManager.shared
+                )
+                .frame(width: closedNotchSize.width, height: closedNotchSize.height)
             }
         }
         .frame(height: closedNotchSize.height)

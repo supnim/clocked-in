@@ -33,11 +33,11 @@ struct OfflineBanner: View {
         Button(action: handleRetry) {
             HStack(spacing: 4) {
                 connectionIcon
-                    .font(.system(size: 10))
+                    .font(.caption2)
                     .foregroundColor(iconColor)
 
                 Text(compactText)
-                    .font(.system(size: 10))
+                    .font(.caption2)
                     .foregroundColor(textColor)
             }
             .padding(.horizontal, 6)
@@ -55,17 +55,17 @@ struct OfflineBanner: View {
         Button(action: handleRetry) {
             HStack(spacing: 8) {
                 connectionIcon
-                    .font(.system(size: 12))
+                    .font(.caption)
                     .foregroundColor(iconColor)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(connectionState.displayText)
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.caption.weight(.medium))
                         .foregroundColor(textColor)
 
                     if let lastUpdated = lastUpdatedDescription {
                         Text("Last updated \(lastUpdated)")
-                            .font(.system(size: 10))
+                            .font(.caption2)
                             .foregroundColor(.secondary)
                     }
                 }
@@ -75,7 +75,7 @@ struct OfflineBanner: View {
                 // Retry indicator
                 if case .offline = connectionState {
                     Text("Tap to retry")
-                        .font(.system(size: 10))
+                        .font(.caption2)
                         .foregroundColor(.secondary)
                 }
             }

@@ -5,6 +5,7 @@ struct PendingRequestsView: View {
     @State private var isLoading = false
     @State private var error: AppError?
     @State private var actionError: AppError?
+    @State private var processingRequestId: String?
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -47,31 +48,17 @@ struct PendingRequestsView: View {
                     VStack(spacing: 12) {
                         HStack {
                             // Avatar
-                            if let avatarURL = request.fromAvatar,
-                               let url = URL(string: avatarURL) {
-                                AsyncImage(url: url) { image in
-                                    image.resizable()
-                                } placeholder: {
-                                    Circle().fill(Color.blue.opacity(0.3))
-                                }
-                                .frame(width: 40, height: 40)
-                                .clipShape(Circle())
-                            } else {
-                                Circle()
-                                    .fill(Color.blue.opacity(0.3))
-                                    .frame(width: 40, height: 40)
-                                    .overlay(
-                                        Text(request.fromName.prefix(1).uppercased())
-                                            .font(.system(size: 16, weight: .medium))
-                                            .foregroundColor(.white)
-                                    )
-                            }
+                            AvatarView(
+                                avatarURL: request.fromAvatar,
+                                displayName: request.fromName,
+                                size: 40
+                            )
 
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(request.fromName)
-                                    .font(.system(size: 16, weight: .medium))
-                                Text("Sent \(relativeTimeString(from: request.createdAt))")
-                                    .font(.system(size: 12))
+                                    .font(.headline)
+                                Text("Sent \(request.createdAt.relativeTimeString())")
+                                    .font(.caption)
                                     .foregroundColor(.secondary)
                             }
 
@@ -84,10 +71,12 @@ struct PendingRequestsView: View {
                                 Text("Accept")
                                     .frame(maxWidth: .infinity)
                                     .padding(.vertical, 8)
-                                    .background(Color.blue)
+                                    .background(Color.accentColor)
                                     .foregroundColor(.white)
                                     .cornerRadius(6)
                             }
+                            .disabled(processingRequestId == request.id)
+                            .accessibilityLabel("Accept request from \(request.fromName)")
 
                             Button(action: { declineRequest(request) }) {
                                 Text("Decline")
@@ -97,6 +86,8 @@ struct PendingRequestsView: View {
                                     .foregroundColor(.primary)
                                     .cornerRadius(6)
                             }
+                            .disabled(processingRequestId == request.id)
+                            .accessibilityLabel("Decline request from \(request.fromName)")
                         }
                     }
                     .padding(.vertical, 8)
@@ -126,45 +117,35 @@ struct PendingRequestsView: View {
     private func acceptRequest(_ request: FriendRequest) {
         Task {
             actionError = nil
+            processingRequestId = request.id
 
             do {
                 try await FriendService.shared.acceptRequest(request.id)
-                // Remove from local array
                 pendingRequests.removeAll { $0.id == request.id }
             } catch let err {
                 actionError = AppError.from(err)
                 ErrorHandler.shared.handle(err, context: "acceptFriendRequest", showToUser: false)
             }
+
+            processingRequestId = nil
         }
     }
 
     private func declineRequest(_ request: FriendRequest) {
         Task {
             actionError = nil
+            processingRequestId = request.id
 
             do {
                 try await FriendService.shared.declineRequest(request.id)
-                // Remove from local array
                 pendingRequests.removeAll { $0.id == request.id }
             } catch let err {
                 actionError = AppError.from(err)
                 ErrorHandler.shared.handle(err, context: "declineFriendRequest", showToUser: false)
             }
+
+            processingRequestId = nil
         }
     }
 
-    private func relativeTimeString(from date: Date) -> String {
-        let now = Date()
-        let components = Calendar.current.dateComponents([.minute, .hour, .day], from: date, to: now)
-
-        if let days = components.day, days > 0 {
-            return days == 1 ? "1 day ago" : "\(days) days ago"
-        } else if let hours = components.hour, hours > 0 {
-            return hours == 1 ? "1 hour ago" : "\(hours) hours ago"
-        } else if let minutes = components.minute, minutes > 0 {
-            return minutes == 1 ? "1 minute ago" : "\(minutes) minutes ago"
-        } else {
-            return "just now"
-        }
-    }
 }

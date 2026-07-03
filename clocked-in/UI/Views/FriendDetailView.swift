@@ -7,6 +7,7 @@ struct FriendDetailView: View {
     @State private var isNudging = false
     @State private var nudgeError: AppError?
     @State private var removeError: AppError?
+    @State private var showRemoveConfirmation = false
 
     /// Whether network-dependent actions are available
     private var canPerformActions: Bool {
@@ -27,10 +28,10 @@ struct FriendDetailView: View {
 
                 VStack(spacing: 4) {
                     Text(friendPresence.user.name)
-                        .font(.system(size: 20, weight: .medium))
+                        .font(.title3.weight(.medium))
 
                     Text("@\(friendPresence.user.username)")
-                        .font(.system(size: 14))
+                        .font(.body)
                         .foregroundColor(.secondary)
 
                     PresenceIndicator(status: friendPresence.status)
@@ -40,16 +41,18 @@ struct FriendDetailView: View {
             // Status section
             VStack(alignment: .leading, spacing: 8) {
                 Text("Status")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.subheadline.weight(.semibold))
                     .foregroundColor(.secondary)
 
                 if friendPresence.status == .offline {
                     Text("Last seen \(friendPresence.lastSeen.relativeTimeString())")
-                        .font(.system(size: 14))
+                        .font(.body)
+                        .accessibilityLabel("Last seen \(friendPresence.lastSeen.relativeTimeString())")
                 } else {
                     Text("Active now")
-                        .font(.system(size: 14))
+                        .font(.body)
                         .foregroundColor(.green)
+                        .accessibilityLabel("Currently active")
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -59,7 +62,7 @@ struct FriendDetailView: View {
             if let activity = friendPresence.currentActivity {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Current Activity")
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.subheadline.weight(.semibold))
                         .foregroundColor(.secondary)
 
                     HStack(spacing: 12) {
@@ -67,19 +70,19 @@ struct FriendDetailView: View {
 
                         VStack(alignment: .leading, spacing: 4) {
                             Text(activity.appName)
-                                .font(.system(size: 14, weight: .medium))
+                                .font(.body.weight(.medium))
 
                             if let windowTitle = activity.windowTitle {
                                 Text(windowTitle)
-                                    .font(.system(size: 12))
+                                    .font(.caption)
                                     .foregroundColor(.secondary)
                                     .lineLimit(2)
                             }
 
                             if let browserURL = activity.browserURL {
                                 Text(browserURL)
-                                    .font(.system(size: 10, design: .monospaced))
-                                    .foregroundColor(.blue)
+                                    .font(.caption2.monospaced())
+                                    .foregroundColor(.accentColor)
                                     .lineLimit(1)
                                     .truncationMode(.middle)
                             }
@@ -114,9 +117,9 @@ struct FriendDetailView: View {
                     if !canPerformActions && nudgeError == nil && removeError == nil {
                         HStack(spacing: 6) {
                             Image(systemName: "wifi.slash")
-                                .font(.system(size: 11))
+                                .font(.caption2)
                             Text("Actions unavailable while offline")
-                                .font(.system(size: 11))
+                                .font(.caption2)
                         }
                         .foregroundColor(.orange)
                         .frame(maxWidth: .infinity)
@@ -134,10 +137,10 @@ struct FriendDetailView: View {
                                     .frame(width: 16, height: 16)
                             } else {
                                 Image(systemName: showNudgeFeedback ? "hand.thumbsup.fill" : "hand.wave.fill")
-                                    .font(.system(size: 14))
+                                    .font(.body)
                             }
                             Text(nudgeButtonText)
-                                .font(.system(size: 14, weight: .medium))
+                                .font(.body.weight(.medium))
                         }
                         .foregroundColor(nudgeButtonColor)
                         .frame(maxWidth: .infinity)
@@ -149,11 +152,13 @@ struct FriendDetailView: View {
                     .disabled(!canPerformActions || isNudging || showNudgeFeedback || friendPresence.status == .offline)
                     .opacity(canPerformActions && friendPresence.status != .offline ? 1 : 0.5)
                     .animation(.easeInOut(duration: 0.2), value: showNudgeFeedback)
+                    .help("Send a nudge")
+                    .accessibilityLabel(nudgeButtonText)
 
                     // Remove friend button
-                    Button(action: removeFriend) {
+                    Button(action: { showRemoveConfirmation = true }) {
                         Text("Remove Friend")
-                            .font(.system(size: 12))
+                            .font(.caption)
                             .foregroundColor(.red)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 8)
@@ -163,6 +168,13 @@ struct FriendDetailView: View {
                     .buttonStyle(.plain)
                     .disabled(!canPerformActions)
                     .opacity(canPerformActions ? 1 : 0.5)
+                    .confirmationDialog("Remove Friend?", isPresented: $showRemoveConfirmation) {
+                        Button("Remove", role: .destructive) { removeFriend() }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("You will no longer see each other's activity.")
+                    }
+                    .help("Remove friend")
                 }
                 .padding(.top, 8)
             }
@@ -208,26 +220,19 @@ struct FriendDetailView: View {
         Task {
             // WebSocket nudge doesn't throw, but we can check connection state
             if !WebSocketClient.shared.isConnected {
-                await MainActor.run {
-                    isNudging = false
-                    nudgeError = .network(message: "Not connected to server")
-                }
+                isNudging = false
+                nudgeError = .network(message: "Not connected to server")
                 return
             }
 
             await WebSocketClient.shared.sendNudge(to: friendPresence.uid)
 
-            await MainActor.run {
-                isNudging = false
-                showNudgeFeedback = true
-            }
+            isNudging = false
+            showNudgeFeedback = true
 
-            // Reset feedback after delay
             try? await Task.sleep(for: .seconds(2))
 
-            await MainActor.run {
-                showNudgeFeedback = false
-            }
+            showNudgeFeedback = false
         }
     }
 

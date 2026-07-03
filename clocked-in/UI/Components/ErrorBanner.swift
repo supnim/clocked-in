@@ -25,11 +25,11 @@ struct ErrorBanner: View {
     private var compactBanner: some View {
         HStack(spacing: 6) {
             Image(systemName: iconName)
-                .font(.system(size: 10))
+                .font(.caption2)
                 .foregroundColor(iconColor)
 
             Text(error.localizedDescription)
-                .font(.system(size: 10))
+                .font(.caption2)
                 .foregroundColor(textColor)
                 .lineLimit(1)
 
@@ -38,7 +38,7 @@ struct ErrorBanner: View {
             if onRetry != nil {
                 Button(action: { onRetry?() }) {
                     Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 9))
+                        .font(.caption2)
                         .foregroundColor(.secondary)
                 }
                 .buttonStyle(.plain)
@@ -47,7 +47,7 @@ struct ErrorBanner: View {
             if onDismiss != nil {
                 Button(action: dismiss) {
                     Image(systemName: "xmark")
-                        .font(.system(size: 9))
+                        .font(.caption2)
                         .foregroundColor(.secondary)
                 }
                 .buttonStyle(.plain)
@@ -65,18 +65,18 @@ struct ErrorBanner: View {
         HStack(spacing: 10) {
             // Icon
             Image(systemName: iconName)
-                .font(.system(size: 14))
+                .font(.subheadline)
                 .foregroundColor(iconColor)
 
             // Message
             VStack(alignment: .leading, spacing: 2) {
                 Text(error.localizedDescription)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.caption.weight(.medium))
                     .foregroundColor(textColor)
 
                 if let suggestion = error.recoverySuggestion {
                     Text(suggestion)
-                        .font(.system(size: 10))
+                        .font(.caption2)
                         .foregroundColor(.secondary)
                 }
             }
@@ -88,7 +88,7 @@ struct ErrorBanner: View {
                 if let retry = onRetry, error.isRetryable {
                     Button(action: retry) {
                         Text("Retry")
-                            .font(.system(size: 11, weight: .medium))
+                            .font(.caption2.weight(.medium))
                             .foregroundColor(.accentColor)
                     }
                     .buttonStyle(.plain)
@@ -97,7 +97,7 @@ struct ErrorBanner: View {
                 if onDismiss != nil {
                     Button(action: dismiss) {
                         Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 14))
+                            .font(.subheadline)
                             .foregroundColor(.secondary.opacity(0.7))
                     }
                     .buttonStyle(.plain)
@@ -184,11 +184,11 @@ struct ErrorToast: View {
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: "exclamationmark.circle.fill")
-                .font(.system(size: 16))
+                .font(.headline)
                 .foregroundColor(.white)
 
             Text(error.localizedDescription)
-                .font(.system(size: 13, weight: .medium))
+                .font(.footnote.weight(.medium))
                 .foregroundColor(.white)
                 .lineLimit(2)
 
@@ -197,7 +197,7 @@ struct ErrorToast: View {
             if onDismiss != nil {
                 Button(action: { onDismiss?() }) {
                     Image(systemName: "xmark")
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.caption.weight(.medium))
                         .foregroundColor(.white.opacity(0.8))
                 }
                 .buttonStyle(.plain)
@@ -223,10 +223,10 @@ struct InlineErrorText: View {
     var body: some View {
         HStack(spacing: 4) {
             Image(systemName: isSuccess ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
-                .font(.system(size: 10))
+                .font(.caption2)
 
             Text(message)
-                .font(.system(size: 11))
+                .font(.caption2)
         }
         .foregroundColor(isSuccess ? .green : .red)
     }

@@ -8,6 +8,7 @@ enum UsernamePickerState {
     case error(String)
 }
 
+@MainActor
 @Observable
 class UsernamePickerViewModel {
     var username = ""
@@ -40,15 +41,11 @@ class UsernamePickerViewModel {
                 let available = try await UsernameService.shared.checkAvailability(username)
                 guard !Task.isCancelled else { return }
 
-                await MainActor.run {
-                    state = available ? .available : .taken
-                    canSubmit = available
-                }
+                state = available ? .available : .taken
+                canSubmit = available
             } catch {
-                await MainActor.run {
-                    state = .error("Failed to check availability")
-                    canSubmit = false
-                }
+                state = .error("Failed to check availability")
+                canSubmit = false
             }
         }
     }
@@ -64,21 +61,19 @@ class UsernamePickerViewModel {
 struct UsernamePickerView: View {
     @State private var viewModel = UsernamePickerViewModel()
     @State private var isSubmitting = false
+    @FocusState private var isUsernameFocused: Bool
 
     let onComplete: () -> Void
-
-    // Inject notch view model for completion handling
-    var notchViewModel: NotchViewModel?
 
     var body: some View {
         VStack(spacing: 16) {
             // Title
             Text("Welcome to Clocked-In")
-                .font(.system(size: 18, weight: .semibold))
+                .font(.title3.weight(.semibold))
 
             // Description
             Text("See what your friends are working on")
-                .font(.system(size: 12))
+                .font(.caption)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
 
@@ -87,11 +82,14 @@ struct UsernamePickerView: View {
                 HStack(spacing: 8) {
                     Text("@")
                         .foregroundColor(.secondary)
-                        .font(.system(size: 14))
+                        .font(.body)
 
                     TextField("", text: $viewModel.username)
                         .textFieldStyle(.plain)
-                        .font(.system(size: 14))
+                        .font(.body)
+                        .focused($isUsernameFocused)
+                        .accessibilityLabel("Username")
+                        .accessibilityHint("Enter your desired username")
                         .onChange(of: viewModel.username) { oldValue, newValue in
                             // Force lowercase
                             if newValue != newValue.lowercased() {
@@ -123,28 +121,28 @@ struct UsernamePickerView: View {
                         ProgressView()
                             .scaleEffect(0.5)
                         Text("Checking availability...")
-                            .font(.system(size: 11))
+                            .font(.caption2)
                             .foregroundColor(.secondary)
                     case .available:
                         Image(systemName: "checkmark.circle.fill")
                             .foregroundColor(.green)
-                            .font(.system(size: 11))
+                            .font(.caption2)
                         Text("✓ Available!")
-                            .font(.system(size: 11))
+                            .font(.caption2)
                             .foregroundColor(.green)
                     case .taken:
                         Image(systemName: "xmark.circle.fill")
                             .foregroundColor(.red)
-                            .font(.system(size: 11))
+                            .font(.caption2)
                         Text("✗ Username is taken")
-                            .font(.system(size: 11))
+                            .font(.caption2)
                             .foregroundColor(.red)
                     case .error(let message):
                         Image(systemName: "exclamationmark.triangle.fill")
                             .foregroundColor(.orange)
-                            .font(.system(size: 11))
+                            .font(.caption2)
                         Text(message)
-                            .font(.system(size: 11))
+                            .font(.caption2)
                             .foregroundColor(.orange)
                     }
                 }
@@ -152,7 +150,7 @@ struct UsernamePickerView: View {
 
             // Instructions
             Text("This is how friends will find you.\nYou can change it later in settings.")
-                .font(.system(size: 10))
+                .font(.caption2)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
                 .lineSpacing(2)
@@ -164,19 +162,21 @@ struct UsernamePickerView: View {
                         .progressViewStyle(CircularProgressViewStyle())
                 } else {
                     Text("Get Started")
-                        .font(.system(size: 14, weight: .medium))
+                        .font(.body.weight(.medium))
                         .frame(maxWidth: .infinity)
                 }
             }
             .disabled(!viewModel.canSubmit || isSubmitting)
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
-            .background(viewModel.canSubmit && !isSubmitting ? Color.blue : Color.gray.opacity(0.3))
+            .background(viewModel.canSubmit && !isSubmitting ? Color.accentColor : Color.gray.opacity(0.3))
             .foregroundColor(viewModel.canSubmit && !isSubmitting ? .white : .secondary)
             .cornerRadius(6)
+            .keyboardShortcut(.defaultAction)
         }
         .padding(16)
         .frame(width: 280)
+        .onAppear { isUsernameFocused = true }
     }
 
     private func submitUsername() {
@@ -187,16 +187,11 @@ struct UsernamePickerView: View {
         Task {
             do {
                 try await viewModel.submit()
-                await MainActor.run {
-                    onComplete()
-                    notchViewModel?.onUsernameSetupComplete()
-                }
+                onComplete()
             } catch {
-                await MainActor.run {
-                    viewModel.state = .error(error.localizedDescription)
-                    viewModel.canSubmit = false
-                    isSubmitting = false
-                }
+                viewModel.state = .error(error.localizedDescription)
+                viewModel.canSubmit = false
+                isSubmitting = false
             }
         }
     }

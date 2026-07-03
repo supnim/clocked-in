@@ -1,7 +1,15 @@
 import Foundation
+import OSLog
 
 class DeepLinkHandler {
     static let shared = DeepLinkHandler()
+
+    /// Posted when a deep link requests adding a friend. userInfo: ["username": String]
+    static let addFriendNotification = Notification.Name("DeepLinkAddFriend")
+    /// Posted when a deep link contains an invite code. userInfo: ["code": String]
+    static let inviteCodeNotification = Notification.Name("DeepLinkInviteCode")
+
+    private let log = Logger(subsystem: "com.clockedin", category: "DeepLinkHandler")
 
     private init() {}
 
@@ -28,14 +36,21 @@ class DeepLinkHandler {
     }
 
     private func handleAddFriend(username: String) {
-        // Show add friend confirmation
-        // This would post a notification or update app state
-        print("Add friend request for username: \(username)")
+        log.info("Add friend request for username: \(username)")
+        NotificationCenter.default.post(
+            name: Self.addFriendNotification,
+            object: nil,
+            userInfo: ["username": username]
+        )
     }
 
     private func handleInviteCode(code: String) {
-        // Handle invite codes (future feature)
-        print("Invite code: \(code)")
+        log.info("Invite code: \(code)")
+        NotificationCenter.default.post(
+            name: Self.inviteCodeNotification,
+            object: nil,
+            userInfo: ["code": code]
+        )
     }
 
     private func handleAuthCallback(url: URL) {

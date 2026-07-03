@@ -4,9 +4,12 @@ struct AppIconView: View {
     let iconData: Data?
     let size: CGSize
 
-    init(iconData: Data?, size: CGSize = CGSize(width: 16, height: 16)) {
+    let appName: String?
+
+    init(iconData: Data?, size: CGSize = CGSize(width: 16, height: 16), appName: String? = nil) {
         self.iconData = iconData
         self.size = size
+        self.appName = appName
     }
 
     var body: some View {
@@ -26,5 +29,6 @@ struct AppIconView: View {
                     .foregroundColor(.secondary)
             }
         }
+        .accessibilityLabel(appName.map { "\($0) icon" } ?? "App icon")
     }
 }

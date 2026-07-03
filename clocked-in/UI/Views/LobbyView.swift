@@ -81,9 +81,9 @@ struct LobbyView: View {
                             // Show cached data notice
                             HStack(spacing: 4) {
                                 Image(systemName: "clock.arrow.circlepath")
-                                    .font(.system(size: 10))
+                                    .font(.caption2)
                                 Text("Showing cached data")
-                                    .font(.system(size: 10))
+                                    .font(.caption2)
                             }
                             .foregroundColor(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -107,6 +107,7 @@ struct LobbyView: View {
                                         onTap: { showFriendDetail(presence) },
                                         currentUserActivity: currentUserActivity
                                     )
+                                    .focusable()
                                 }
                             }
                         }
@@ -119,18 +120,14 @@ struct LobbyView: View {
                                 FriendRow(presence: presence) {
                                     showFriendDetail(presence)
                                 }
+                                .focusable()
                             }
                         }
                     }
                 }
             }
         }
-        .onAppear {
-            presenceListener.startListening()
-        }
-        .onDisappear {
-            presenceListener.stopListening()
-        }
+        // Note: PresenceListener lifecycle is managed by CompactNotchView
     }
 
     // MARK: - Section Headers
@@ -143,20 +140,21 @@ struct LobbyView: View {
 
             // App name with count
             Text("\(group.appName)")
-                .font(.system(size: 11, weight: .semibold))
+                .font(.caption2.weight(.semibold))
                 .foregroundColor(isUserInApp ? .green : .secondary)
+                .accessibilityLabel("\(group.appName) group")
 
             Text("(\(group.friends.count))")
-                .font(.system(size: 10, weight: .medium))
+                .font(.caption2.weight(.medium))
                 .foregroundColor(isUserInApp ? .green.opacity(0.8) : .secondary.opacity(0.7))
 
             // "You're here" indicator
             if isUserInApp {
                 HStack(spacing: 2) {
                     Image(systemName: "sparkle")
-                        .font(.system(size: 8))
+                        .font(.caption2)
                     Text("You're here")
-                        .font(.system(size: 9, weight: .medium))
+                        .font(.caption2.weight(.medium))
                 }
                 .foregroundColor(.green)
                 .padding(.horizontal, 5)
@@ -181,10 +179,11 @@ struct LobbyView: View {
 
     private var offlineSectionHeader: some View {
         Text("Offline")
-            .font(.system(size: 11, weight: .semibold))
+            .font(.caption2.weight(.semibold))
             .foregroundColor(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
+            .accessibilityLabel("Offline friends")
     }
 }

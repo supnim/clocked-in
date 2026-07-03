@@ -2,13 +2,14 @@ import SwiftUI
 
 struct AddFriendView: View {
     @State private var searchQuery = ""
-    @State private var searchResults: [User] = []
+    @State private var searchResults: [PublicUser] = []
     @State private var isSearching = false
     @State private var searchError: AppError?
     @State private var requestError: AppError?
     @State private var successMessage: String?
     @State private var inviteLink: String = ""
     @State private var searchTask: Task<Void, Never>?
+    @FocusState private var isSearchFocused: Bool
     @Environment(\.dismiss) private var dismiss
 
     /// Whether network is available for searches
@@ -22,9 +23,9 @@ struct AddFriendView: View {
             if !isOnline {
                 HStack(spacing: 6) {
                     Image(systemName: "wifi.slash")
-                        .font(.system(size: 11))
+                        .font(.caption2)
                     Text("Search unavailable offline")
-                        .font(.system(size: 11))
+                        .font(.caption2)
                 }
                 .foregroundColor(.orange)
                 .frame(maxWidth: .infinity)
@@ -39,15 +40,19 @@ struct AddFriendView: View {
                     .foregroundColor(.secondary)
                 TextField("Search by username", text: $searchQuery)
                     .textFieldStyle(.plain)
+                    .focused($isSearchFocused)
                     .disabled(!isOnline)
                     .onChange(of: searchQuery) { _, newValue in
                         searchUsers(query: newValue)
                     }
+                    .accessibilityLabel("Search username")
+                    .accessibilityHint("Search for friends by username")
             }
             .padding(8)
             .background(Color.gray.opacity(0.1))
             .cornerRadius(8)
             .opacity(isOnline ? 1 : 0.5)
+            .onAppear { isSearchFocused = true }
 
             // Search results
             if isSearching {
@@ -65,9 +70,9 @@ struct AddFriendView: View {
 
                         VStack(alignment: .leading, spacing: 2) {
                             Text(user.name)
-                                .font(.system(size: 14, weight: .medium))
+                                .font(.body.weight(.medium))
                             Text("@\(user.username)")
-                                .font(.system(size: 12))
+                                .font(.caption)
                                 .foregroundColor(.secondary)
                         }
 
@@ -79,6 +84,7 @@ struct AddFriendView: View {
                         .buttonStyle(.borderedProminent)
                         .controlSize(.small)
                         .disabled(!isOnline)
+                        .accessibilityLabel("Add \(user.name)")
                     }
                     .padding(.vertical, 4)
                 }
@@ -92,12 +98,12 @@ struct AddFriendView: View {
             // Share link section
             VStack(spacing: 6) {
                 Text("Or share your invite link")
-                    .font(.system(size: 11))
+                    .font(.caption2)
                     .foregroundColor(.secondary)
 
                 HStack {
                     Text(inviteLink.isEmpty ? "Loading..." : inviteLink)
-                        .font(.system(size: 11, design: .monospaced))
+                        .font(.caption2.monospaced())
                         .foregroundColor(inviteLink.isEmpty ? .secondary.opacity(0.5) : .secondary)
                         .lineLimit(1)
 
@@ -109,10 +115,12 @@ struct AddFriendView: View {
                         }
                     }) {
                         Image(systemName: "doc.on.doc")
-                            .font(.system(size: 11))
+                            .font(.caption2)
                     }
                     .buttonStyle(.plain)
                     .disabled(inviteLink.isEmpty)
+                    .help("Copy link")
+                    .accessibilityLabel("Copy invite link")
                 }
                 .padding(8)
                 .background(Color.white.opacity(0.05))
@@ -153,6 +161,7 @@ struct AddFriendView: View {
 
         guard isOnline else {
             searchError = .network(message: "Search unavailable while offline")
+            searchResults = []
             return
         }
 
@@ -170,28 +179,24 @@ struct AddFriendView: View {
             try? await Task.sleep(for: .milliseconds(300))
             guard !Task.isCancelled else { return }
 
-            await MainActor.run { isSearching = true }
+            isSearching = true
 
             do {
                 let results = try await UsernameService.shared.searchUsers(query: query)
                 guard !Task.isCancelled else { return }
-                await MainActor.run {
-                    searchResults = results
-                    isSearching = false
-                }
+                searchResults = results
+                isSearching = false
             } catch {
                 guard !Task.isCancelled else { return }
-                await MainActor.run {
-                    searchError = AppError.from(error)
-                    searchResults = []
-                    isSearching = false
-                    ErrorHandler.shared.handle(error, context: "searchUsers", showToUser: false)
-                }
+                searchError = AppError.from(error)
+                searchResults = []
+                isSearching = false
+                ErrorHandler.shared.handle(error, context: "searchUsers", showToUser: false)
             }
         }
     }
 
-    private func sendFriendRequest(to user: User) {
+    private func sendFriendRequest(to user: PublicUser) {
         guard isOnline else {
             requestError = .network(message: "Cannot send requests while offline")
             return
@@ -207,10 +212,8 @@ struct AddFriendView: View {
 
                 // Clear success message after a few seconds
                 try? await Task.sleep(for: .seconds(3))
-                await MainActor.run {
-                    if successMessage?.contains(user.username) == true {
-                        successMessage = nil
-                    }
+                if successMessage?.contains(user.username) == true {
+                    successMessage = nil
                 }
             } catch let err {
                 let appError = AppError.from(err)

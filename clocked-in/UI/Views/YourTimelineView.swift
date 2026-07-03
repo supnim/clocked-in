@@ -14,10 +14,10 @@ struct YourTimelineView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Your Activity")
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(.headline)
 
                     Text("See how you spend your time")
-                        .font(.system(size: 12))
+                        .font(.caption)
                         .foregroundColor(.secondary)
                 }
 
@@ -25,13 +25,14 @@ struct YourTimelineView: View {
 
                 Button(action: onEditStatus) {
                     Text("Edit Status")
-                        .font(.system(size: 12))
+                        .font(.caption)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
-                        .background(Color.blue.opacity(0.1))
-                        .foregroundColor(.blue)
+                        .background(Color.accentColor.opacity(0.1))
+                        .foregroundColor(.accentColor)
                         .cornerRadius(4)
                 }
+                .help("Edit status")
             }
 
             // Period selector
@@ -39,7 +40,7 @@ struct YourTimelineView: View {
                 ForEach(TimelinePeriod.allCases, id: \.self) { period in
                     Button(action: { selectPeriod(period) }) {
                         Text(period.rawValue)
-                            .font(.system(size: 12, weight: selectedPeriod == period ? .semibold : .regular))
+                            .font(.caption.weight(selectedPeriod == period ? .semibold : .regular))
                             .foregroundColor(selectedPeriod == period ? .primary : .secondary)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 6)
@@ -68,6 +69,7 @@ struct YourTimelineView: View {
             loadTimeline()
         }
         .onChange(of: selectedPeriod) { oldValue, newValue in
+            isLoading = true
             loadTimeline()
         }
     }
@@ -88,21 +90,14 @@ struct YourTimelineView: View {
         Task {
             do {
                 let data = try await TimelineService.shared.getTimeline(for: userId, period: selectedPeriod)
-
-                await MainActor.run {
-                    self.timelineData = data
-                    self.isLoading = false
-                }
+                self.timelineData = data
+                self.isLoading = false
             } catch let error as TimelineError {
-                await MainActor.run {
-                    self.errorMessage = error.errorDescription ?? "Failed to load timeline"
-                    self.isLoading = false
-                }
+                self.errorMessage = error.errorDescription ?? "Failed to load timeline"
+                self.isLoading = false
             } catch {
-                await MainActor.run {
-                    self.errorMessage = error.localizedDescription
-                    self.isLoading = false
-                }
+                self.errorMessage = error.localizedDescription
+                self.isLoading = false
             }
         }
     }
@@ -116,7 +111,7 @@ struct LoadingView: View {
             ProgressView()
                 .scaleEffect(1.5)
             Text("Loading your activity...")
-                .font(.system(size: 12))
+                .font(.caption)
                 .foregroundColor(.secondary)
         }
     }
@@ -132,19 +127,19 @@ struct ErrorView: View {
                 .font(.system(size: 32))
                 .foregroundColor(.orange)
             Text("Unable to load timeline")
-                .font(.system(size: 14))
+                .font(.body)
                 .foregroundColor(.secondary)
             Text(message)
-                .font(.system(size: 12))
+                .font(.caption)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
             Button(action: onRetry) {
                 Text("Try Again")
-                    .font(.system(size: 12))
+                    .font(.caption)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
-                    .background(Color.blue.opacity(0.1))
-                    .foregroundColor(.blue)
+                    .background(Color.accentColor.opacity(0.1))
+                    .foregroundColor(.accentColor)
                     .cornerRadius(4)
             }
         }
@@ -160,18 +155,18 @@ struct EmptyTimelineView: View {
                 .font(.system(size: 32))
                 .foregroundColor(.secondary)
             Text("No activity data yet")
-                .font(.system(size: 14))
+                .font(.body)
             Text("Start using apps to see your timeline")
-                .font(.system(size: 12))
+                .font(.caption)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
             Button(action: onLoad) {
                 Text("Refresh")
-                    .font(.system(size: 12))
+                    .font(.caption)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
-                    .background(Color.blue.opacity(0.1))
-                    .foregroundColor(.blue)
+                    .background(Color.accentColor.opacity(0.1))
+                    .foregroundColor(.accentColor)
                     .cornerRadius(4)
             }
         }
@@ -189,7 +184,7 @@ struct TimelineContentView: View {
                 .frame(height: 24)
                 .overlay(
                     Text("Timeline visualization")
-                        .font(.system(size: 10))
+                        .font(.caption2)
                         .foregroundColor(.secondary)
                 )
 
@@ -197,19 +192,19 @@ struct TimelineContentView: View {
             HStack(spacing: 16) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Total Time")
-                        .font(.system(size: 10))
+                        .font(.caption2)
                         .foregroundColor(.secondary)
                     Text(formatTotalTime(data.totalTime))
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.subheadline.weight(.semibold))
                 }
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Top App")
-                        .font(.system(size: 10))
+                        .font(.caption2)
                         .foregroundColor(.secondary)
                     if let topApp = data.apps.first {
                         Text(topApp.appName)
-                            .font(.system(size: 14, weight: .semibold))
+                            .font(.subheadline.weight(.semibold))
                             .lineLimit(1)
                     }
                 }
@@ -220,7 +215,7 @@ struct TimelineContentView: View {
             // App breakdown
             VStack(alignment: .leading, spacing: 8) {
                 Text("Today's Apps")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.caption.weight(.semibold))
 
                 ForEach(data.apps.prefix(3), id: \.bundleId) { app in
                     HStack(spacing: 8) {
@@ -229,13 +224,13 @@ struct TimelineContentView: View {
                             .frame(width: 8, height: 8)
 
                         Text(app.appName)
-                            .font(.system(size: 12))
+                            .font(.caption)
                             .lineLimit(1)
 
                         Spacer()
 
                         Text(app.formattedTime)
-                            .font(.system(size: 11))
+                            .font(.caption2)
                             .foregroundColor(.secondary)
                     }
                 }
@@ -244,17 +239,21 @@ struct TimelineContentView: View {
             // Insights
             if !data.insights.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("💡 Insights")
-                        .font(.system(size: 12, weight: .semibold))
+                    HStack(spacing: 4) {
+                        Image(systemName: "lightbulb")
+                            .font(.caption.weight(.semibold))
+                        Text("Insights")
+                            .font(.caption.weight(.semibold))
+                    }
 
                     ForEach(data.insights) { insight in
                         HStack(alignment: .top, spacing: 6) {
                             Image(systemName: insight.icon)
                                 .foregroundColor(insight.color)
-                                .font(.system(size: 10))
+                                .font(.caption2)
 
                             Text(insight.message)
-                                .font(.system(size: 11))
+                                .font(.caption2)
                                 .foregroundColor(.secondary)
                                 .lineLimit(2)
                         }

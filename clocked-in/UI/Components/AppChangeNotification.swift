@@ -4,6 +4,7 @@ struct AppChangeNotification: View {
     let friend: FriendPresence
     let oldAppIcon: Data?
     let newAppIcon: Data?
+    var onTapFriend: ((FriendPresence) -> Void)? = nil
 
     var body: some View {
         HStack(spacing: 8) {
@@ -17,7 +18,7 @@ struct AppChangeNotification: View {
 
             // Arrow
             Image(systemName: "arrow.right")
-                .font(.system(size: 10))
+                .font(.caption2)
                 .foregroundColor(.secondary)
 
             // New app icon
@@ -27,16 +28,16 @@ struct AppChangeNotification: View {
 
             // Friend name
             Text(friend.user.username)
-                .font(.system(size: 11))
+                .font(.caption2)
                 .foregroundColor(.secondary)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
-        .background(Color.black.opacity(0.8))
+        .background(Color(nsColor: .windowBackgroundColor))
         .cornerRadius(12)
+        .accessibilityLabel("\(friend.user.username) switched apps")
         .onTapGesture {
-            // Tap to open friend detail (per plan)
-            // TODO: Navigate to friend detail view
+            onTapFriend?(friend)
         }
     }
 }

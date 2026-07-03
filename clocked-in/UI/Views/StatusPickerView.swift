@@ -1,4 +1,5 @@
 import SwiftUI
+import OSLog
 
 struct StatusPickerView: View {
     @Environment(\.dismiss) private var dismiss
@@ -7,6 +8,7 @@ struct StatusPickerView: View {
     @State private var customText = ""
     @State private var isUpdating = false
     @FocusState private var isCustomFieldFocused: Bool
+    private let log = Logger(subsystem: "com.clockedin", category: "StatusPicker")
 
     // Preset statuses with icons
     private let presetStatuses: [(icon: String, text: String)] = [
@@ -26,15 +28,16 @@ struct StatusPickerView: View {
             // Header
             HStack {
                 Text("Set Status")
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.headline)
 
                 Spacer()
 
                 Button(action: { dismiss() }) {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 18))
+                        .font(.title3)
                         .foregroundColor(.secondary)
                 }
+                .help("Close")
                 .buttonStyle(.plain)
             }
             .padding()
@@ -48,12 +51,12 @@ struct StatusPickerView: View {
                         Button(action: clearStatus) {
                             HStack(spacing: 12) {
                                 Image(systemName: "xmark.circle")
-                                    .font(.system(size: 16))
+                                    .font(.headline)
                                     .foregroundColor(.red)
                                     .frame(width: 24)
 
                                 Text("Clear status")
-                                    .font(.system(size: 14))
+                                    .font(.body)
                                     .foregroundColor(.red)
 
                                 Spacer()
@@ -82,17 +85,17 @@ struct StatusPickerView: View {
                     // Custom status input
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Custom status")
-                            .font(.system(size: 12, weight: .medium))
+                            .font(.caption.weight(.medium))
                             .foregroundColor(.secondary)
 
                         HStack(spacing: 8) {
                             Image(systemName: "pencil")
-                                .font(.system(size: 14))
+                                .font(.body)
                                 .foregroundColor(.secondary)
 
                             TextField("What are you up to?", text: $customText)
                                 .textFieldStyle(.plain)
-                                .font(.system(size: 14))
+                                .font(.body)
                                 .focused($isCustomFieldFocused)
                                 .onSubmit {
                                     if !customText.isEmpty {
@@ -103,7 +106,7 @@ struct StatusPickerView: View {
                             if !customText.isEmpty {
                                 Button(action: { setStatus(customText) }) {
                                     Image(systemName: "arrow.up.circle.fill")
-                                        .font(.system(size: 18))
+                                        .font(.title3)
                                         .foregroundColor(.accentColor)
                                 }
                                 .buttonStyle(.plain)
@@ -118,7 +121,7 @@ struct StatusPickerView: View {
                         )
 
                         Text("Max 50 characters")
-                            .font(.system(size: 11))
+                            .font(.caption2)
                             .foregroundColor(.secondary)
                     }
                 }
@@ -135,19 +138,19 @@ struct StatusPickerView: View {
         Button(action: { setStatus(text) }) {
             HStack(spacing: 12) {
                 Image(systemName: icon)
-                    .font(.system(size: 14))
+                    .font(.body)
                     .foregroundColor(isSelected ? .accentColor : .secondary)
                     .frame(width: 24)
 
                 Text(text)
-                    .font(.system(size: 14))
+                    .font(.body)
                     .foregroundColor(.primary)
 
                 Spacer()
 
                 if isSelected {
                     Image(systemName: "checkmark")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.caption.weight(.semibold))
                         .foregroundColor(.accentColor)
                 }
             }
@@ -171,16 +174,12 @@ struct StatusPickerView: View {
         Task {
             do {
                 try await updateStatusOnServer(trimmed)
-                await MainActor.run {
-                    authManager.currentUser?.statusMessage = trimmed
-                    isUpdating = false
-                    dismiss()
-                }
+                authManager.currentUser?.statusMessage = trimmed
+                isUpdating = false
+                dismiss()
             } catch {
-                print("Failed to update status: \(error)")
-                await MainActor.run {
-                    isUpdating = false
-                }
+                log.error("Failed to update status: \(error)")
+                isUpdating = false
             }
         }
     }
@@ -191,16 +190,12 @@ struct StatusPickerView: View {
         Task {
             do {
                 try await updateStatusOnServer(nil)
-                await MainActor.run {
-                    authManager.currentUser?.statusMessage = nil
-                    isUpdating = false
-                    dismiss()
-                }
+                authManager.currentUser?.statusMessage = nil
+                isUpdating = false
+                dismiss()
             } catch {
-                print("Failed to clear status: \(error)")
-                await MainActor.run {
-                    isUpdating = false
-                }
+                log.error("Failed to clear status: \(error)")
+                isUpdating = false
             }
         }
     }

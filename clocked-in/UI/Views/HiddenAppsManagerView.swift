@@ -29,11 +29,11 @@ struct HiddenAppsManagerView: View {
             // Header
             HStack {
                 Text("Hidden Apps")
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.headline)
                 Spacer()
                 Button(action: { showingAddSection.toggle() }) {
                     Image(systemName: showingAddSection ? "minus.circle" : "plus.circle")
-                        .font(.system(size: 14))
+                        .font(.body)
                 }
                 .buttonStyle(.plain)
                 .help(showingAddSection ? "Close add section" : "Add hidden app")
@@ -41,7 +41,7 @@ struct HiddenAppsManagerView: View {
 
             // Description
             Text("Activity from these apps will appear as \"ghost\" status to your friends.")
-                .font(.system(size: 11))
+                .font(.caption2)
                 .foregroundColor(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -74,12 +74,12 @@ struct HiddenAppsManagerView: View {
             // Recent Apps Picker
             VStack(alignment: .leading, spacing: 6) {
                 Text("Recent Apps")
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.caption.weight(.medium))
                     .foregroundColor(.secondary)
 
                 if recentApps.isEmpty {
                     Text("No recent apps found")
-                        .font(.system(size: 11))
+                        .font(.caption2)
                         .foregroundColor(.secondary.opacity(0.7))
                         .italic()
                         .padding(.vertical, 4)
@@ -97,20 +97,20 @@ struct HiddenAppsManagerView: View {
             // Manual Entry
             VStack(alignment: .leading, spacing: 6) {
                 Text("Manual Entry")
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.caption.weight(.medium))
                     .foregroundColor(.secondary)
 
                 HStack(spacing: 8) {
                     TextField("Bundle ID (e.g., com.apple.Safari)", text: $manualBundleId)
                         .textFieldStyle(.plain)
-                        .font(.system(size: 12))
+                        .font(.caption)
                         .padding(6)
                         .background(Color.gray.opacity(0.1))
                         .cornerRadius(6)
 
                     Button(action: addManualBundleId) {
                         Image(systemName: "plus")
-                            .font(.system(size: 12, weight: .medium))
+                            .font(.caption.weight(.medium))
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
@@ -133,7 +133,7 @@ struct HiddenAppsManagerView: View {
                         .frame(width: 28, height: 28)
                 } else {
                     Image(systemName: "app.dashed")
-                        .font(.system(size: 24))
+                        .font(.title3)
                         .foregroundColor(.secondary)
                         .frame(width: 28, height: 28)
                 }
@@ -175,7 +175,7 @@ struct HiddenAppsManagerView: View {
                     .frame(width: 24, height: 24)
             } else {
                 Image(systemName: "app.dashed")
-                    .font(.system(size: 20))
+                    .font(.title3)
                     .foregroundColor(.secondary)
                     .frame(width: 24, height: 24)
             }
@@ -183,9 +183,9 @@ struct HiddenAppsManagerView: View {
             // App Name & Bundle ID
             VStack(alignment: .leading, spacing: 2) {
                 Text(appInfo?.name ?? "Unknown App")
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.subheadline.weight(.medium))
                 Text(bundleId)
-                    .font(.system(size: 10, design: .monospaced))
+                    .font(.caption2.monospaced())
                     .foregroundColor(.secondary)
                     .lineLimit(1)
             }
@@ -195,7 +195,7 @@ struct HiddenAppsManagerView: View {
             // Remove Button
             Button(action: { unhideApp(bundleId) }) {
                 Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 14))
+                    .font(.body)
                     .foregroundColor(.secondary)
             }
             .buttonStyle(.plain)
@@ -212,15 +212,15 @@ struct HiddenAppsManagerView: View {
     private var emptyState: some View {
         VStack(spacing: 8) {
             Image(systemName: "eye.slash")
-                .font(.system(size: 24))
+                .font(.title3)
                 .foregroundColor(.secondary.opacity(0.5))
 
             Text("No hidden apps")
-                .font(.system(size: 13))
+                .font(.subheadline)
                 .foregroundColor(.secondary)
 
             Text("Add apps above to hide their activity")
-                .font(.system(size: 11))
+                .font(.caption2)
                 .foregroundColor(.secondary.opacity(0.7))
         }
         .frame(maxWidth: .infinity)
