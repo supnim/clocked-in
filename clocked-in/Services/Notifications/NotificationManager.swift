@@ -1,9 +1,11 @@
 import Foundation
 import UserNotifications
+import OSLog
 
 class NotificationManager {
     static let shared = NotificationManager()
 
+    private let log = Logger(subsystem: "com.clockedin", category: "NotificationManager")
     private let center = UNUserNotificationCenter.current()
 
     private init() {}
@@ -28,7 +30,7 @@ class NotificationManager {
 
         center.add(request) { error in
             if let error = error {
-                print("Error sending notification: \(error)")
+                self.log.error("Error sending notification: \(error)")
             }
         }
     }

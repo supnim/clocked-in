@@ -25,21 +25,13 @@ final class PresenceManager {
 
     // MARK: - Offline Update Queue
 
-    /// Pending presence updates queued while offline
+    /// Pending presence update queued while offline (only latest matters)
     @ObservationIgnored
-    private var pendingUpdates: [Activity] = []
+    private var pendingUpdate: Activity?
 
-    /// Maximum number of pending updates to keep (prevent memory issues)
-    private let maxPendingUpdates = 10
-
-    /// Whether there are pending updates waiting to be sent
+    /// Whether there is a pending update waiting to be sent
     var hasPendingUpdates: Bool {
-        !pendingUpdates.isEmpty
-    }
-
-    /// Number of pending updates
-    var pendingUpdateCount: Int {
-        pendingUpdates.count
+        pendingUpdate != nil
     }
 
     private init() {}
@@ -95,28 +87,22 @@ final class PresenceManager {
     // MARK: - Pending Updates Queue
 
     private func queuePendingUpdate(_ activity: Activity) {
-        // Only keep the most recent update for efficiency
-        // When we come back online, we only need to send current state
-        pendingUpdates = [activity]
+        pendingUpdate = activity
     }
 
-    /// Flush pending updates when reconnecting
+    /// Flush pending update when reconnecting
     /// Called by NetworkMonitor when connection is restored
     func flushPendingUpdates() async {
         guard WebSocketClient.shared.isConnected else { return }
-        guard !pendingUpdates.isEmpty else { return }
+        guard let activity = pendingUpdate else { return }
 
-        // Send only the most recent activity (last state)
-        if let latestActivity = pendingUpdates.last {
-            await sendPresenceUpdate(for: latestActivity)
-        }
-
-        pendingUpdates.removeAll()
+        pendingUpdate = nil
+        await sendPresenceUpdate(for: activity)
     }
 
     /// Clear pending updates (e.g., when user goes invisible)
     func clearPendingUpdates() {
-        pendingUpdates.removeAll()
+        pendingUpdate = nil
     }
 
     private func sendGhostPresence() async {

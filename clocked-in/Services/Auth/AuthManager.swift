@@ -3,7 +3,9 @@ import AppKit
 import Security
 import Observation
 import AuthenticationServices
+import OSLog
 
+@MainActor
 @Observable
 final class AuthManager {
     static let shared = AuthManager()
@@ -13,6 +15,11 @@ final class AuthManager {
     var isLoading = false
 
     private var authToken: String?
+
+    /// Whether the user needs to pick a username (new device registration)
+    var needsUsername = false
+
+    private let log = Logger(subsystem: "com.clockedin", category: "AuthManager")
 
     private let keychainService = "com.clockedin.auth"
     private let tokenKey = "authToken"
@@ -25,6 +32,40 @@ final class AuthManager {
         }
     }
 
+    // MARK: - Device-ID Auth (primary, frictionless)
+
+    /// Registers or logs in with a device-generated UUID. No user interaction needed.
+    func signInWithDevice() async throws {
+        isLoading = true
+        defer { isLoading = false }
+
+        let deviceId = IdentityService.shared.getOrCreateUserUUID()
+
+        let body = DeviceRegisterRequest(deviceId: deviceId)
+        let response: DeviceRegisterResponse = try await APIClient.shared.post("/auth/device", body: body)
+
+        // Store credentials
+        saveToKeychain(key: tokenKey, value: response.token)
+        saveToKeychain(key: userIdKey, value: response.userId)
+
+        authToken = response.token
+        APIClient.shared.setToken(response.token)
+
+        // Fetch user profile
+        await fetchCurrentUser()
+
+        // If signOut was triggered during fetch (e.g. 401), bail out
+        guard isAuthenticated else { return }
+
+        // Connect WebSocket
+        WebSocketClient.shared.connect(token: response.token)
+
+        // If new user, they need to pick a username
+        if response.isNew {
+            needsUsername = true
+        }
+    }
+
     func signInWithGoogle() {
         // Open browser to OAuth endpoint
         let url = AppConfig.shared.apiBaseURL.appendingPathComponent("auth/google")
@@ -33,7 +74,6 @@ final class AuthManager {
 
     /// Initiates Apple Sign-In flow and authenticates with the backend.
     /// - Throws: AppleSignInError or network errors
-    @MainActor
     func signInWithApple() async throws {
         isLoading = true
         defer { isLoading = false }
@@ -103,6 +143,15 @@ final class AuthManager {
     }
 
     func signOut() {
+        // Stop all services before disconnecting
+        PresenceListener.shared.stopListening()
+        PresenceManager.shared.stopPresence()
+        PresenceManager.shared.clearPendingUpdates()
+        IdleDetector.shared.stop()
+        EventMonitors.shared.stop()
+        CachedFriendsService.shared.clearCache()
+
+        // Disconnect WebSocket
         WebSocketClient.shared.disconnect()
 
         // Clear keychain
@@ -111,6 +160,7 @@ final class AuthManager {
 
         authToken = nil
         currentUser = nil
+        needsUsername = false
         APIClient.shared.setToken(nil)
     }
 
@@ -148,9 +198,7 @@ final class AuthManager {
             let appError = AppError.from(error)
             if appError.requiresReauth {
                 // Token is invalid, trigger sign out
-                await MainActor.run {
-                    signOut()
-                }
+                signOut()
             }
 
             currentUser = nil
@@ -175,7 +223,7 @@ final class AuthManager {
         // Add new
         let status = SecItemAdd(query as CFDictionary, nil)
         if status != errSecSuccess {
-            print("Keychain save failed with status: \(status)")
+            log.error("Keychain save failed with status: \(status)")
         }
     }
 
@@ -233,5 +281,29 @@ struct AppleAuthResponse: Decodable {
     enum CodingKeys: String, CodingKey {
         case token
         case userId = "user_id"
+    }
+}
+
+// MARK: - Device Auth Models
+
+struct DeviceRegisterRequest: Encodable {
+    let deviceId: String
+    let platform: String = "macos"
+
+    enum CodingKeys: String, CodingKey {
+        case deviceId = "device_id"
+        case platform
+    }
+}
+
+struct DeviceRegisterResponse: Decodable {
+    let token: String
+    let userId: String
+    let isNew: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case token
+        case userId = "user_id"
+        case isNew = "is_new"
     }
 }

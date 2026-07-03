@@ -1,5 +1,6 @@
 import Foundation
 
+@MainActor
 @Observable
 final class WebSocketClient {
     static let shared = WebSocketClient()
@@ -19,6 +20,7 @@ final class WebSocketClient {
     private var storedToken: String?
     var reconnectAttempts = 0
     private var isIntentionalDisconnect = false
+    private var isConnecting = false
 
     var isConnected = false
     var isReconnecting = false
@@ -52,8 +54,10 @@ final class WebSocketClient {
     }
 
     private func performConnect(token: String) {
+        guard !isConnecting else { return }
         guard let url = buildWebSocketURL(token: token) else { return }
 
+        isConnecting = true
         webSocket = URLSession.shared.webSocketTask(with: url)
         webSocket?.resume()
         // Note: isConnected will be set true after first successful receive
@@ -77,6 +81,7 @@ final class WebSocketClient {
         receiveTask?.cancel()
         webSocket?.cancel(with: .goingAway, reason: nil)
         webSocket = nil
+        isConnecting = false
         let wasConnected = isConnected
         isConnected = false
         isReconnecting = false
@@ -135,17 +140,15 @@ final class WebSocketClient {
             }
 
             // Connection succeeded
-            await MainActor.run { [weak self] in
-                self?.webSocket = task
-                self?.isConnected = true
-                self?.isReconnecting = false
-                self?.reconnectAttempts = 0
-                self?.startHeartbeat()
-                self?.startReceiving()
-            }
+            self.webSocket = task
+            self.isConnected = true
+            self.isReconnecting = false
+            self.reconnectAttempts = 0
+            self.startHeartbeat()
+            self.startReceiving()
         } catch let error as URLError where error.code == .userAuthenticationRequired {
             // Token is invalid - clear and stop reconnecting
-            await handleAuthenticationFailure()
+            handleAuthenticationFailure()
         } catch {
             // Connection failed, try again
             task.cancel(with: .goingAway, reason: nil)
@@ -153,13 +156,11 @@ final class WebSocketClient {
         }
     }
 
-    private func handleAuthenticationFailure() async {
-        await MainActor.run { [weak self] in
-            self?.storedToken = nil
-            self?.isReconnecting = false
-            self?.reconnectAttempts = 0
-            self?.onAuthenticationFailed?()
-        }
+    private func handleAuthenticationFailure() {
+        storedToken = nil
+        isReconnecting = false
+        reconnectAttempts = 0
+        onAuthenticationFailed?()
     }
 
     private func withTimeout<T: Sendable>(seconds: Double, operation: @escaping @Sendable () async throws -> T) async throws -> T {
@@ -171,7 +172,9 @@ final class WebSocketClient {
                 try await Task.sleep(for: .seconds(seconds))
                 throw URLError(.timedOut)
             }
-            let result = try await group.next()!
+            guard let result = try await group.next() else {
+                throw URLError(.timedOut)
+            }
             group.cancelAll()
             return result
         }
@@ -204,60 +207,58 @@ final class WebSocketClient {
             while !Task.isCancelled {
                 guard let ws = self?.webSocket else { break }
                 do {
-                    let message = try await ws.receive()
+                    let message = try await self?.withTimeout(seconds: 60) {
+                        try await ws.receive()
+                    }
+                    guard let message else { break }
                     // Mark as connected after first successful receive
                     if !hasReceivedFirstMessage {
                         hasReceivedFirstMessage = true
-                        await MainActor.run {
-                            self?.isConnected = true
-                            self?.onConnectionStateChange?(true)
-                        }
+                        self?.isConnecting = false
+                        self?.isConnected = true
+                        self?.reconnectAttempts = 0
+                        self?.onConnectionStateChange?(true)
                     }
                     await self?.handleMessage(message)
                 } catch {
-                    // Connection dropped unexpectedly
-                    await MainActor.run {
-                        self?.handleUnexpectedDisconnect()
-                    }
+                    // Connection dropped or timed out
+                    self?.handleUnexpectedDisconnect()
                     break
                 }
             }
         }
     }
 
-    private func handleMessage(_ message: URLSessionWebSocketTask.Message) async {
+    private func handleMessage(_ message: URLSessionWebSocketTask.Message) {
         guard case .string(let text) = message,
-              let data = text.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let type = json["type"] as? String else {
+              let data = text.data(using: .utf8) else {
             return
         }
 
-        await MainActor.run { [weak self] in
-            switch type {
-            case "presence_update":
-                if let dataDict = json["data"] as? [String: Any],
-                   let update = try? JSONDecoder().decode(PresenceUpdate.self, from: JSONSerialization.data(withJSONObject: dataDict)) {
-                    self?.onPresenceUpdate?(update)
-                }
-            case "nudge":
-                if let dataDict = json["data"] as? [String: Any],
-                   let nudge = try? JSONDecoder().decode(NudgeMessage.self, from: JSONSerialization.data(withJSONObject: dataDict)) {
-                    self?.onNudge?(nudge)
-                }
-            case "friend_request":
-                if let dataDict = json["data"] as? [String: Any],
-                   let request = try? JSONDecoder().decode(FriendRequestNotification.self, from: JSONSerialization.data(withJSONObject: dataDict)) {
-                    self?.onFriendRequest?(request)
-                }
-            case "initial_presence":
-                if let dataArray = json["data"] as? [[String: Any]],
-                   let presences = try? JSONDecoder().decode([FriendPresenceData].self, from: JSONSerialization.data(withJSONObject: dataArray)) {
-                    self?.onInitialPresence?(presences)
-                }
-            default:
-                break
+        // Decode the envelope to get type and route to specific decoder
+        guard let envelope = try? JSONDecoder().decode(WSEnvelope.self, from: data) else {
+            return
+        }
+
+        switch envelope.type {
+        case "presence_update":
+            if let update = try? JSONDecoder().decode(WSMessage<PresenceUpdate>.self, from: data) {
+                onPresenceUpdate?(update.data)
             }
+        case "nudge":
+            if let nudge = try? JSONDecoder().decode(WSMessage<NudgeMessage>.self, from: data) {
+                onNudge?(nudge.data)
+            }
+        case "friend_request":
+            if let request = try? JSONDecoder().decode(WSMessage<FriendRequestNotification>.self, from: data) {
+                onFriendRequest?(request.data)
+            }
+        case "initial_presence":
+            if let presences = try? JSONDecoder().decode(WSMessage<[FriendPresenceData]>.self, from: data) {
+                onInitialPresence?(presences.data)
+            }
+        default:
+            break
         }
     }
 
@@ -377,6 +378,17 @@ struct FriendPresenceData: Codable {
         case updatedAt = "updated_at"
         case user
     }
+}
+
+// MARK: - WebSocket Envelope Types
+
+private struct WSEnvelope: Decodable {
+    let type: String
+}
+
+private struct WSMessage<T: Decodable>: Decodable {
+    let type: String
+    let data: T
 }
 
 // User data embedded in presence updates

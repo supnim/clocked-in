@@ -1,5 +1,6 @@
 import Foundation
 
+@MainActor
 class NotificationGrouper {
     static let shared = NotificationGrouper()
 
@@ -20,9 +21,7 @@ class NotificationGrouper {
             try? await Task.sleep(for: .seconds(1))
             guard !Task.isCancelled else { return }
 
-            await MainActor.run {
-                self.sendGroupedNotification()
-            }
+            self.sendGroupedNotification()
         }
     }
 

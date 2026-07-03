@@ -38,13 +38,13 @@ final class PresenceListener {
     private var userCache: [String: User] = [:]
 
     @ObservationIgnored
-    private var isListening = false
+    private var listenerCount = 0
 
     private init() {}
 
     func startListening() {
-        guard !isListening else { return }
-        isListening = true
+        listenerCount += 1
+        guard listenerCount == 1 else { return }
 
         // Don't listen when invisible
         guard !AppSettings.shared.isInvisible else { return }
@@ -63,11 +63,20 @@ final class PresenceListener {
     }
 
     func stopListening() {
-        isListening = false
+        listenerCount = max(0, listenerCount - 1)
+        guard listenerCount == 0 else { return }
         // Clear callbacks
         WebSocketClient.shared.onInitialPresence = nil
         WebSocketClient.shared.onPresenceUpdate = nil
         WebSocketClient.shared.onNudge = nil
+        WebSocketClient.shared.onFriendRequest = nil
+        // Clear cached state
+        clearCache()
+    }
+
+    func clearCache() {
+        userCache.removeAll()
+        friendsPresence.removeAll()
     }
 
     // MARK: - WebSocket Callbacks
@@ -221,9 +230,7 @@ final class PresenceListener {
     // MARK: - Notifications
 
     private func isUserActiveForNotifications() -> Bool {
-        // Check if user has been active in last 15 minutes (same as away detection)
-        // TODO: Integrate with IdleDetector
-        return true // For now, allow notifications
+        return IdleDetector.shared.isUserActive
     }
 
     // MARK: - Currently With Detection

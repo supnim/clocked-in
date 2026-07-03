@@ -53,6 +53,7 @@ enum UsernameValidationResult {
     }
 }
 
+@MainActor
 @Observable
 final class UsernameService {
     static let shared = UsernameService()
@@ -128,8 +129,8 @@ final class UsernameService {
 
         log.debug("Checking availability for username '\(normalizedUsername)'")
 
-        // TODO: Implement API call to check username availability
-        throw UsernameError.notImplemented
+        let response: CheckUsernameResponse = try await APIClient.shared.get("/api/users/check-username/\(normalizedUsername)")
+        return response.available
     }
 
     // MARK: - Claiming
@@ -151,8 +152,8 @@ final class UsernameService {
 
         log.info("Attempting to claim username '\(normalizedUsername)' for user \(userId)")
 
-        // TODO: Implement API call to claim username
-        throw UsernameError.notImplemented
+        let body = ClaimUsernameRequest(username: normalizedUsername)
+        let _: ClaimUsernameResponse = try await APIClient.shared.post("/api/users/username", body: body)
     }
 
     /// Releases a username (for account deletion or username change)
@@ -165,8 +166,9 @@ final class UsernameService {
 
         log.info("Attempting to release username '\(normalizedUsername)' for user \(userId)")
 
-        // TODO: Implement API call to release username
-        throw UsernameError.notImplemented
+        // Use PATCH /api/users/me to clear the username
+        let body: [String: String?] = ["username": nil]
+        let _: ClaimUsernameResponse = try await APIClient.shared.patch("/api/users/me", body: body)
     }
 
     /// Changes a user's username atomically
@@ -186,8 +188,8 @@ final class UsernameService {
 
         log.info("Attempting to change username from '\(oldUsername.lowercased())' to '\(normalizedNew)' for user \(userId)")
 
-        // TODO: Implement API call to change username
-        throw UsernameError.notImplemented
+        let body = ClaimUsernameRequest(username: normalizedNew)
+        let _: ClaimUsernameResponse = try await APIClient.shared.post("/api/users/username", body: body)
     }
 
     /// Looks up a user ID by username
@@ -198,14 +200,18 @@ final class UsernameService {
 
         log.debug("Looking up user ID for username '\(normalizedUsername)'")
 
-        // TODO: Implement API call to look up user by username
-        throw UsernameError.notImplemented
+        do {
+            let user: PublicUser = try await APIClient.shared.get("/api/users/\(normalizedUsername)")
+            return user.id
+        } catch {
+            return nil
+        }
     }
 
     /// Searches for users by username prefix
     /// - Parameter query: The search query (username prefix)
     /// - Returns: Array of matching users (up to 10)
-    func searchUsers(query: String) async throws -> [User] {
+    func searchUsers(query: String) async throws -> [PublicUser] {
         let normalizedQuery = query.lowercased()
 
         guard normalizedQuery.count >= 2 else {
@@ -214,7 +220,34 @@ final class UsernameService {
 
         log.debug("Searching for users with prefix '\(normalizedQuery)'")
 
-        // TODO: Implement API call to search users
-        throw UsernameError.notImplemented
+        let encoded = normalizedQuery.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? normalizedQuery
+        return try await APIClient.shared.get("/api/users/search?q=\(encoded)")
+    }
+}
+
+// MARK: - API Models
+
+private struct CheckUsernameResponse: Decodable {
+    let available: Bool
+}
+
+private struct ClaimUsernameRequest: Encodable {
+    let username: String
+}
+
+private struct ClaimUsernameResponse: Decodable {}
+
+struct PublicUser: Decodable, Identifiable, Hashable {
+    let id: String
+    let username: String
+    let displayName: String?
+    let avatarUrl: String?
+
+    var name: String { displayName ?? username }
+
+    enum CodingKeys: String, CodingKey {
+        case id, username
+        case displayName = "display_name"
+        case avatarUrl = "avatar_url"
     }
 }

@@ -5,10 +5,13 @@ import AppKit
 /// Handles Apple Sign-In flow for macOS using ASAuthorizationController.
 /// This service manages the native Sign in with Apple UI and coordinates
 /// with the backend to complete authentication.
+@MainActor
 final class AppleSignInService: NSObject {
     static let shared = AppleSignInService()
 
     private var continuation: CheckedContinuation<ASAuthorizationAppleIDCredential, Error>?
+    private var isSigningIn = false
+    private var currentController: ASAuthorizationController?
 
     private override init() {
         super.init()
@@ -18,7 +21,18 @@ final class AppleSignInService: NSObject {
     /// - Returns: The Apple ID credential containing identity token and user info
     /// - Throws: AppleSignInError if the flow fails or is cancelled
     func signIn() async throws -> ASAuthorizationAppleIDCredential {
-        try await withCheckedThrowingContinuation { continuation in
+        // If a previous sign-in is in flight, cancel it
+        if isSigningIn, let existing = continuation {
+            // Nil out the old controller's delegate to prevent stale callbacks
+            currentController?.delegate = nil
+            currentController = nil
+            existing.resume(throwing: AppleSignInError.cancelled)
+            continuation = nil
+        }
+        isSigningIn = true
+        defer { isSigningIn = false }
+
+        return try await withCheckedThrowingContinuation { continuation in
             self.continuation = continuation
 
             let provider = ASAuthorizationAppleIDProvider()
@@ -28,6 +42,7 @@ final class AppleSignInService: NSObject {
             let controller = ASAuthorizationController(authorizationRequests: [request])
             controller.delegate = self
             controller.presentationContextProvider = self
+            self.currentController = controller
             controller.performRequests()
         }
     }
@@ -36,41 +51,51 @@ final class AppleSignInService: NSObject {
 // MARK: - ASAuthorizationControllerDelegate
 
 extension AppleSignInService: ASAuthorizationControllerDelegate {
-    func authorizationController(
+    nonisolated func authorizationController(
         controller: ASAuthorizationController,
         didCompleteWithAuthorization authorization: ASAuthorization
     ) {
-        guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential else {
-            continuation?.resume(throwing: AppleSignInError.invalidCredential)
-            continuation = nil
-            return
-        }
+        Task { @MainActor in
+            guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential else {
+                continuation?.resume(throwing: AppleSignInError.invalidCredential)
+                continuation = nil
+                currentController = nil
+                return
+            }
 
-        continuation?.resume(returning: credential)
-        continuation = nil
+            continuation?.resume(returning: credential)
+            continuation = nil
+            currentController = nil
+        }
     }
 
-    func authorizationController(
+    nonisolated func authorizationController(
         controller: ASAuthorizationController,
         didCompleteWithError error: Error
     ) {
-        let nsError = error as NSError
-        if nsError.domain == ASAuthorizationError.errorDomain,
-           nsError.code == ASAuthorizationError.canceled.rawValue {
-            continuation?.resume(throwing: AppleSignInError.cancelled)
-        } else {
-            continuation?.resume(throwing: AppleSignInError.authorizationFailed(error))
+        Task { @MainActor in
+            let nsError = error as NSError
+            if nsError.domain == ASAuthorizationError.errorDomain,
+               nsError.code == ASAuthorizationError.canceled.rawValue {
+                continuation?.resume(throwing: AppleSignInError.cancelled)
+            } else {
+                continuation?.resume(throwing: AppleSignInError.authorizationFailed(error))
+            }
+            continuation = nil
+            currentController = nil
         }
-        continuation = nil
     }
 }
 
 // MARK: - ASAuthorizationControllerPresentationContextProviding
 
 extension AppleSignInService: ASAuthorizationControllerPresentationContextProviding {
-    func presentationAnchor(for controller: ASAuthorizationController) -> ASPresentationAnchor {
-        // Return the key window for presenting the Sign in with Apple sheet
-        return NSApplication.shared.keyWindow ?? NSApplication.shared.windows.first!
+    nonisolated func presentationAnchor(for controller: ASAuthorizationController) -> ASPresentationAnchor {
+        return MainActor.assumeIsolated {
+            NSApplication.shared.keyWindow
+                ?? NSApplication.shared.windows.first
+                ?? NSWindow()
+        }
     }
 }
 

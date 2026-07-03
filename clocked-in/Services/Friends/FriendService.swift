@@ -57,6 +57,7 @@ private struct EmptyResponse: Codable {}
 
 // MARK: - FriendService
 
+@MainActor
 @Observable
 final class FriendService {
     static let shared = FriendService()

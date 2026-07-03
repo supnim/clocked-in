@@ -1,5 +1,7 @@
 import Foundation
+import OSLog
 
+@MainActor
 @Observable
 final class APIClient {
     static let shared = APIClient()
@@ -46,6 +48,12 @@ final class APIClient {
         }
 
         guard 200..<300 ~= httpResponse.statusCode else {
+            // Surface 401 through ErrorHandler for centralized auth failure handling
+            if httpResponse.statusCode == 401 {
+                Task {
+                    ErrorHandler.shared.onAuthFailure?()
+                }
+            }
             throw APIError.httpError(statusCode: httpResponse.statusCode, data: data)
         }
 

@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 /// Wrapper for cached data with timestamp
 struct CachedData<T: Codable>: Codable {
@@ -42,6 +43,7 @@ final class CachedFriendsService {
         static let lastOnlineTimestamp = "last_online_timestamp"
     }
 
+    private let log = Logger(subsystem: "com.clockedin", category: "CachedFriendsService")
     private let userDefaults = UserDefaults.standard
 
     /// When the cache was last updated (nil if no cache)
@@ -67,7 +69,7 @@ final class CachedFriendsService {
             // Update last online timestamp when we successfully cache while online
             userDefaults.set(Date(), forKey: Keys.lastOnlineTimestamp)
         } catch {
-            print("[CachedFriendsService] Failed to cache friends list: \(error)")
+            log.error("Failed to cache friends list: \(error)")
         }
     }
 
@@ -84,7 +86,8 @@ final class CachedFriendsService {
             let decoder = JSONDecoder()
             return try decoder.decode(CachedData<[FriendPresence]>.self, from: data)
         } catch {
-            print("[CachedFriendsService] Failed to load cached friends: \(error)")
+            log.error("Failed to load cached friends (removing corrupt cache): \(error)")
+            userDefaults.removeObject(forKey: Keys.friends)
             return nil
         }
     }
@@ -102,7 +105,7 @@ final class CachedFriendsService {
             let data = try encoder.encode(cached)
             userDefaults.set(data, forKey: Keys.userProfile)
         } catch {
-            print("[CachedFriendsService] Failed to cache user profile: \(error)")
+            log.error("Failed to cache user profile: \(error)")
         }
     }
 
@@ -115,7 +118,8 @@ final class CachedFriendsService {
             let decoder = JSONDecoder()
             return try decoder.decode(CachedUserProfile.self, from: data)
         } catch {
-            print("[CachedFriendsService] Failed to load cached user profile: \(error)")
+            log.error("Failed to load cached user profile (removing corrupt cache): \(error)")
+            userDefaults.removeObject(forKey: Keys.userProfile)
             return nil
         }
     }

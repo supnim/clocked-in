@@ -1,9 +1,11 @@
 import Foundation
 import Security
+import OSLog
 
 class IdentityService {
     static let shared = IdentityService()
 
+    private let log = Logger(subsystem: "com.clockedin", category: "IdentityService")
     private let keychainKey = "user_uuid"
     private let keychainService = "com.clockedin.app"
 
@@ -24,7 +26,7 @@ class IdentityService {
             return newUUID
         } else {
             // Fallback if Keychain fails (shouldn't happen in practice)
-            print("Warning: Failed to save UUID to Keychain, using in-memory UUID")
+            log.warning("Failed to save UUID to Keychain, using in-memory UUID")
             return newUUID
         }
     }
