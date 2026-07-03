@@ -23,8 +23,25 @@ final class ActivitySessionManager {
         setupOrphanCleanup()
     }
 
-    nonisolated deinit {
-        // Deinit is nonisolated - observers and tasks will be cleaned up when deallocated
+    func stop() {
+        debounceTask?.cancel()
+        debounceTask = nil
+        cleanupTimer?.invalidate()
+        cleanupTimer = nil
+
+        let notificationCenter = NSWorkspace.shared.notificationCenter
+        if let sleepObserver {
+            notificationCenter.removeObserver(sleepObserver)
+            self.sleepObserver = nil
+        }
+        if let wakeObserver {
+            notificationCenter.removeObserver(wakeObserver)
+            self.wakeObserver = nil
+        }
+        if let terminateObserver {
+            notificationCenter.removeObserver(terminateObserver)
+            self.terminateObserver = nil
+        }
     }
 
     // MARK: - Session Management
@@ -124,14 +141,29 @@ final class ActivitySessionManager {
 
     // MARK: - Persistence
 
+    private let sessionsKey = "com.clockedin.activity_sessions"
+
     private func saveSession(_ session: ActivitySession) async {
-        // Generate session ID
-        let sessionId = UUID().uuidString
+        // Persist locally via UserDefaults
+        var sessions = loadLocalSessions()
+        sessions.append(session)
+        // Keep only last 100 sessions locally
+        if sessions.count > 100 {
+            sessions = Array(sessions.suffix(100))
+        }
+        if let data = try? JSONEncoder().encode(sessions) {
+            UserDefaults.standard.set(data, forKey: sessionsKey)
+        }
 
-        // TODO: Save to backend
-        // try await ActivityService.shared.saveSession(session, id: sessionId)
+        logger.debug("Saved session locally: \(session.appName) (\(session.duration)s)")
+    }
 
-        logger.debug("Saved session to backend: \(sessionId)")
+    private func loadLocalSessions() -> [ActivitySession] {
+        guard let data = UserDefaults.standard.data(forKey: sessionsKey),
+              let sessions = try? JSONDecoder().decode([ActivitySession].self, from: data) else {
+            return []
+        }
+        return sessions
     }
 
     // MARK: - Orphan Cleanup
@@ -160,12 +192,23 @@ final class ActivitySessionManager {
     private func cleanupOrphanSessions() async {
         logger.debug("Checking for orphan sessions to clean up")
 
-        // TODO: Query backend for sessions without endTime older than 24h
-        // let orphans = try await ActivityService.shared.findOrphanSessions()
+        var sessions = loadLocalSessions()
+        let cutoff = Date().addingTimeInterval(-24 * 60 * 60) // 24 hours ago
+        var cleaned = 0
 
-        // For each orphan, set endTime to startTime + 1 hour
-        // try await ActivityService.shared.closeOrphanSessions(orphans)
+        for i in 0..<sessions.count {
+            if sessions[i].endTime == nil && sessions[i].startTime < cutoff {
+                // Close orphan: set endTime to startTime + 1 hour
+                sessions[i].endTime = sessions[i].startTime.addingTimeInterval(3600)
+                cleaned += 1
+            }
+        }
 
-        logger.debug("Cleaned up orphan sessions")
+        if cleaned > 0 {
+            if let data = try? JSONEncoder().encode(sessions) {
+                UserDefaults.standard.set(data, forKey: sessionsKey)
+            }
+            logger.debug("Cleaned up \(cleaned) orphan sessions")
+        }
     }
 }

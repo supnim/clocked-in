@@ -6,7 +6,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var notchWindowController: NotchWindowController?
     private let log = Logger(subsystem: "clocked-in", category: "lifecycle")
 
+    private var onboardingWindow: NSWindow?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.accessory)
+
         log.info("Clocked-In app did finish launching")
 
         // Set up error handler callbacks
@@ -62,12 +66,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showOnboarding() {
+        // Reuse existing onboarding window if one is already open
+        if let existing = onboardingWindow, existing.isVisible {
+            existing.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
         let onboardingView = OnboardingView()
         let window = createWindow(
             content: onboardingView,
             title: "Welcome to Clocked-In",
             size: NSSize(width: 400, height: 500)
         )
+        onboardingWindow = window
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -89,6 +101,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        var finished = false
+        Task { @MainActor in
+            await PresenceManager.shared.setOffline()
+            finished = true
+        }
+        let deadline = Date().addingTimeInterval(2)
+        while !finished && Date() < deadline {
+            CFRunLoopRunInMode(.defaultMode, 0.1, false)
+        }
+
         stopServices()
         log.info("Clocked-In app will terminate")
     }

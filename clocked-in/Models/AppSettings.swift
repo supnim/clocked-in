@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 
+@MainActor
 @Observable
 final class AppSettings {
     static let shared = AppSettings()
@@ -25,7 +26,13 @@ final class AppSettings {
     }
 
     var isInvisible: Bool {
-        didSet { defaults.set(isInvisible, forKey: Keys.isInvisible) }
+        didSet {
+            defaults.set(isInvisible, forKey: Keys.isInvisible)
+            // Clear stale join notification tracking when becoming visible
+            if !isInvisible {
+                NotchNotificationManager.shared.clearJoinNotificationTracking()
+            }
+        }
     }
 
     var launchAtLogin: Bool {
@@ -64,7 +71,7 @@ final class AppSettings {
         isInvisible = defaults.bool(forKey: Keys.isInvisible)
         launchAtLogin = defaults.bool(forKey: Keys.launchAtLogin)
         shareWindowTitle = defaults.object(forKey: Keys.shareWindowTitle) as? Bool ?? true
-        shareBrowserURL = defaults.bool(forKey: Keys.shareBrowserURL)
+        shareBrowserURL = defaults.object(forKey: Keys.shareBrowserURL) as? Bool ?? true
         hasCompletedOnboarding = defaults.bool(forKey: Keys.hasCompletedOnboarding)
         // Nudge settings default to true for fun out-of-the-box experience
         nudgeShake = defaults.object(forKey: Keys.nudgeShake) as? Bool ?? true

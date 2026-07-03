@@ -17,39 +17,125 @@ class NotchViewModel {
     var openReason: NotchOpenReason = .boot
     var contentType: NotchContentType = .lobby
     var isHovering = false
-
-    @ObservationIgnored
-    var onStatusChange: ((NotchStatus) -> Void)?
-
-    private let events = EventMonitors.shared
-    private var cancellables = Set<AnyCancellable>()
-    private var hoverTimer: DispatchWorkItem?
-    private var bootAnimationTimer: DispatchWorkItem?
-    private let hoverDelay: TimeInterval = 1.0
-
-    let geometry: NotchGeometry
-
-    init(geometry: NotchGeometry) {
-        self.geometry = geometry
-        setupEventHandlers()
-    }
+    var quickPopNotification: FriendActivityNotification?
 
     // Dynamic height support
     var isExpanded: Bool = false
 
+    private let events = EventMonitors.shared
+    private var cancellables = Set<AnyCancellable>()
+
+    @ObservationIgnored
+    private var hoverTask: Task<Void, Never>?
+    @ObservationIgnored
+    private var popDismissTask: Task<Void, Never>?
+    @ObservationIgnored
+    private var quickPopTask: Task<Void, Never>?
+    @ObservationIgnored
+    private var keyMonitor: Any?
+
+    private let hoverDelay: TimeInterval = 1.0
+
+    let geometry: NotchGeometry
+
+    @ObservationIgnored
+    private var deepLinkObservers: [NSObjectProtocol] = []
+
+    init(geometry: NotchGeometry) {
+        self.geometry = geometry
+        setupEventHandlers()
+        setupKeyboardMonitor()
+        setupDeepLinkObservers()
+    }
+
+    deinit {
+        if let monitor = keyMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
+        for observer in deepLinkObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
+
+    // MARK: - Deep Link Observers
+
+    private func setupDeepLinkObservers() {
+        let addFriendObserver = NotificationCenter.default.addObserver(
+            forName: DeepLinkHandler.addFriendNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let username = notification.userInfo?["username"] as? String else { return }
+            MainActor.assumeIsolated {
+                _ = username  // Username available for pre-filling AddFriendView if needed
+                self?.showContent(.addFriend)
+            }
+        }
+        deepLinkObservers.append(addFriendObserver)
+
+        let inviteCodeObserver = NotificationCenter.default.addObserver(
+            forName: DeepLinkHandler.inviteCodeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let _ = notification.userInfo?["code"] as? String else { return }
+            MainActor.assumeIsolated {
+                self?.showContent(.addFriend)
+            }
+        }
+        deepLinkObservers.append(inviteCodeObserver)
+    }
+
+    // MARK: - Sizes
+
     var openedSize: CGSize {
+        let screenHeight = geometry.screenRect.height
+        let maxHeight = min(screenHeight * 0.6, 700)
         let baseWidth = min(geometry.screenRect.width * 0.4, 480)
         let baseHeight: CGFloat = switch contentType {
-        case .usernamePicker: 280
-        case .lobby: isExpanded ? 800 : 320  // Expandable lobby
-        case .settings: 420
-        case .addFriend: 400
-        case .pendingRequests: 360
-        case .friendDetail: 360
+        case .usernamePicker: min(280, maxHeight)
+        case .lobby: min(isExpanded ? 800 : 320, maxHeight)
+        case .settings: min(420, maxHeight)
+        case .addFriend: min(400, maxHeight)
+        case .pendingRequests: min(360, maxHeight)
+        case .friendDetail: min(360, maxHeight)
         }
 
         return CGSize(width: baseWidth, height: baseHeight)
     }
+
+    // MARK: - Keyboard Monitor
+
+    private func setupKeyboardMonitor() {
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            MainActor.assumeIsolated { () -> NSEvent? in
+                guard let self else { return event }
+
+                // Escape closes the notch
+                if event.keyCode == 53, self.status == .opened {
+                    self.notchClose()
+                    return nil
+                }
+
+                // Cmd shortcuts
+                if event.modifierFlags.contains(.command) {
+                    switch event.keyCode {
+                    case 12:  // Cmd+Q
+                        NSApp.terminate(nil); return nil
+                    case 13:  // Cmd+W
+                        if self.status == .opened { self.notchClose(); return nil }
+                    case 43:  // Cmd+,
+                        self.showContent(.settings); return nil
+                    default: break
+                    }
+                }
+
+                return event
+            }
+        }
+    }
+
+    // MARK: - Event Handlers
 
     private func setupEventHandlers() {
         events.mouseLocation
@@ -75,27 +161,25 @@ class NotchViewModel {
         guard newHovering != isHovering else { return }
         isHovering = newHovering
 
-        hoverTimer?.cancel()
-        hoverTimer = nil
+        hoverTask?.cancel()
+        hoverTask = nil
 
         if isHovering && (status == .closed || status == .popping) {
-            let workItem = DispatchWorkItem { [weak self] in
-                guard let self, self.isHovering else { return }
+            hoverTask = Task {
+                try? await Task.sleep(for: .seconds(hoverDelay))
+                guard !Task.isCancelled, self.isHovering else { return }
                 self.notchOpen(reason: .hover)
             }
-            hoverTimer = workItem
-            DispatchQueue.main.asyncAfter(deadline: .now() + hoverDelay, execute: workItem)
         }
     }
 
-    private     func handleMouseDown() {
+    private func handleMouseDown() {
         let location = NSEvent.mouseLocation
 
         switch status {
         case .opened:
             // Prevent closing if username picker is shown and no username set
             if contentType == .usernamePicker {
-                // Don't close the notch when username picker is active
                 return
             }
 
@@ -113,7 +197,8 @@ class NotchViewModel {
     }
 
     private func repostClickAt(_ location: CGPoint) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+        Task {
+            try? await Task.sleep(for: .seconds(0.05))
             guard let screen = NSScreen.main else { return }
             let screenHeight = screen.frame.height
             let cgPoint = CGPoint(x: location.x, y: screenHeight - location.y)
@@ -138,49 +223,61 @@ class NotchViewModel {
         }
     }
 
-    // MARK: - State Transitions
-
     // MARK: - Animation Constants (matched to claude-island)
+
     private let openAnimation = Animation.spring(response: 0.42, dampingFraction: 0.8, blendDuration: 0)
     private let closeAnimation = Animation.spring(response: 0.45, dampingFraction: 1.0, blendDuration: 0)
     private let popAnimation = Animation.spring(response: 0.4, dampingFraction: 0.6, blendDuration: 0)
     private let bootDuration: TimeInterval = 1.0
+
+    // MARK: - State Transitions
 
     func notchOpen(reason: NotchOpenReason) {
         openReason = reason
         withAnimation(openAnimation) {
             status = .opened
         }
-        onStatusChange?(status)
     }
 
     func notchClose() {
         withAnimation(closeAnimation) {
             status = .closed
         }
-        onStatusChange?(status)
     }
 
     func notchPop() {
         withAnimation(popAnimation) {
             status = .popping
         }
-        onStatusChange?(status)
 
-        bootAnimationTimer?.cancel()
-        let workItem = DispatchWorkItem { [weak self] in
-            self?.notchClose()
+        popDismissTask?.cancel()
+        popDismissTask = Task {
+            try? await Task.sleep(for: .seconds(bootDuration))
+            guard !Task.isCancelled else { return }
+            notchClose()
         }
-        bootAnimationTimer = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + bootDuration, execute: workItem)
     }
 
     func notchUnpop() {
         guard status == .popping else { return }
-        bootAnimationTimer?.cancel()
-        bootAnimationTimer = nil
+        popDismissTask?.cancel()
+        popDismissTask = nil
         status = .closed
-        onStatusChange?(status)
+    }
+
+    func notchQuickPop(notification: FriendActivityNotification) {
+        guard status == .closed else { return }
+        quickPopNotification = notification
+        withAnimation(popAnimation) {
+            status = .popping
+        }
+        quickPopTask?.cancel()
+        quickPopTask = Task {
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
+            quickPopNotification = nil
+            notchClose()
+        }
     }
 
     func showContent(_ type: NotchContentType) {
@@ -193,10 +290,8 @@ class NotchViewModel {
     // MARK: - Username Setup
 
     func initializeContentType() {
-        // Check if user has completed username setup
         if needsUsernameSetup() {
             contentType = .usernamePicker
-            // Auto-open on first launch
             if status == .closed {
                 notchOpen(reason: .boot)
             }
@@ -206,7 +301,6 @@ class NotchViewModel {
     }
 
     func onUsernameSetupComplete() {
-        // Called when username setup is finished
         contentType = .lobby
         if status == .opened {
             notchClose()
@@ -217,11 +311,9 @@ class NotchViewModel {
 
     func toggleExpanded() {
         guard contentType == .lobby && status == .opened else { return }
-        isExpanded.toggle()
 
-        // Animate the size change
         withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-            // Size will be recalculated via openedSize
+            isExpanded.toggle()
         }
     }
 
@@ -230,11 +322,9 @@ class NotchViewModel {
     }
 
     private func needsUsernameSetup() -> Bool {
-        // Check if user has authenticated and has a username set
         guard let user = AuthManager.shared.currentUser else {
-            return false // Not authenticated, will show onboarding instead
+            return false
         }
-        // If username is empty or default (e.g., UUID-based), show username picker
         return user.username.isEmpty
     }
 }

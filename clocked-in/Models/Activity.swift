@@ -10,6 +10,17 @@ struct Activity: Codable, Hashable {
     var appIcon: Data?
     var timestamp: Date
 
+    enum CodingKeys: String, CodingKey {
+        case appName = "app_name"
+        case bundleId = "bundle_id"
+        case windowTitle = "window_title"
+        case browserURL = "browser_url"
+        case browserDomain = "browser_domain"
+        case browserTitle = "browser_title"
+        case appIcon = "app_icon"
+        case timestamp
+    }
+
     init(appName: String, bundleId: String, windowTitle: String? = nil, browserURL: String? = nil, browserDomain: String? = nil, browserTitle: String? = nil, appIcon: Data? = nil, timestamp: Date = Date()) {
         self.appName = appName
         self.bundleId = bundleId
@@ -33,6 +44,16 @@ struct ActivitySession: Codable, Identifiable {
     var windowTitles: [String]?
     var browserDomains: [String]?
 
+    enum CodingKeys: String, CodingKey {
+        case id
+        case appName = "app_name"
+        case bundleId = "bundle_id"
+        case startTime = "start_time"
+        case endTime = "end_time"
+        case windowTitles = "window_titles"
+        case browserDomains = "browser_domains"
+    }
+
     var duration: TimeInterval {
         let end = endTime ?? Date()
         return end.timeIntervalSince(startTime)
@@ -46,6 +67,11 @@ struct DailySummary: Codable, Identifiable {
     let date: String
     var apps: [AppSummary]
     var totalTime: TimeInterval
+
+    enum CodingKeys: String, CodingKey {
+        case id, date, apps
+        case totalTime = "total_time"
+    }
 }
 
 struct AppSummary: Codable {
@@ -53,4 +79,11 @@ struct AppSummary: Codable {
     let bundleId: String
     var totalTime: TimeInterval
     var sessionCount: Int
+
+    enum CodingKeys: String, CodingKey {
+        case appName = "app_name"
+        case bundleId = "bundle_id"
+        case totalTime = "total_time"
+        case sessionCount = "session_count"
+    }
 }

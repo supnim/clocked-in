@@ -3,10 +3,10 @@
 import Foundation
 import SwiftUI
 import AppKit
-import Combine
 
 // MARK: - NotchPanel (NSPanel subclass for proper floating behavior)
 
+@MainActor
 class NotchPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
@@ -26,25 +26,29 @@ class NotchPanel: NSPanel {
 
 // MARK: - NotchWindowController
 
+@MainActor
 class NotchWindowController: NSWindowController {
     private let viewModel: NotchViewModel
-    private var cancellables = Set<AnyCancellable>()
+    private var statusObservationTask: Task<Void, Never>?
 
-    /// The window height for positioning (matches claude-island)
-    private let windowHeight: CGFloat = 750
+    /// Window height derived from screen geometry
+    private var windowHeight: CGFloat {
+        viewModel.geometry.screenRect.height
+    }
 
     init(viewModel: NotchViewModel) {
         self.viewModel = viewModel
 
         let screenFrame = viewModel.geometry.screenRect
+        let height = screenFrame.height
 
         // Create NSPanel (not NSWindow) for proper floating behavior
         let panel = NotchPanel(
             contentRect: NSRect(
                 x: screenFrame.origin.x,
-                y: screenFrame.maxY - windowHeight,
+                y: screenFrame.maxY - height,
                 width: screenFrame.width,
-                height: windowHeight
+                height: height
             ),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
@@ -68,7 +72,6 @@ class NotchWindowController: NSWindowController {
 
         // Set up content with pass-through hosting view
         let hostingView = PassThroughHostingView(rootView: NotchContentView(viewModel: viewModel))
-        let capturedWindowHeight = windowHeight
         hostingView.hitTestRect = { [weak viewModel] in
             guard let vm = viewModel else { return .zero }
             return NotchGeometry.calculateHitTestRect(
@@ -76,40 +79,48 @@ class NotchWindowController: NSWindowController {
                 openedSize: vm.openedSize,
                 deviceNotchRect: vm.geometry.deviceNotchRect,
                 screenWidth: vm.geometry.screenRect.width,
-                windowHeight: capturedWindowHeight
+                windowHeight: height
             )
         }
         panel.contentView = hostingView
 
         super.init(window: panel)
 
-        // Subscribe to status changes for dynamic mouse event handling
+        // Observe status changes for dynamic mouse event handling
         setupStatusObserver()
 
         // Boot animation after slight delay
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-            self?.viewModel.notchPop()
+        Task {
+            try? await Task.sleep(for: .seconds(0.3))
+            self.viewModel.notchPop()
         }
     }
 
     private func setupStatusObserver() {
-        viewModel.onStatusChange = { [weak self] status in
-            guard let self = self, let panel = self.window as? NotchPanel else { return }
+        statusObservationTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
 
-            DispatchQueue.main.async {
+                // Wait for status to change
+                await withCheckedContinuation { continuation in
+                    withObservationTracking {
+                        _ = self.viewModel.status
+                    } onChange: {
+                        continuation.resume()
+                    }
+                }
+
+                // Handle the new status
+                guard let panel = self.window as? NotchPanel else { continue }
+                let status = self.viewModel.status
                 switch status {
                 case .opened:
-                    // Enable mouse events when opened
                     panel.ignoresMouseEvents = false
-
-                    // Only activate if NOT opened by notification
                     if self.viewModel.openReason != .notification {
                         NSApp.activate(ignoringOtherApps: false)
                         panel.makeKey()
                     }
-
                 case .closed, .popping:
-                    // Disable mouse events when closed (clicks pass through)
                     panel.ignoresMouseEvents = true
                 }
             }

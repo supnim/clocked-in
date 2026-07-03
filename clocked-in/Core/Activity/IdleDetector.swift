@@ -60,17 +60,17 @@ final class IdleDetector {
     private func setupActivityMonitoring() {
         // Monitor mouse events
         mouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDown, .rightMouseDown]) { [weak self] _ in
-            self?.handleUserActivity()
+            Task { @MainActor [weak self] in self?.handleUserActivity() }
         }
 
         // Monitor keyboard events
         keyboardMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown]) { [weak self] _ in
-            self?.handleUserActivity()
+            Task { @MainActor [weak self] in self?.handleUserActivity() }
         }
 
         // Also monitor local events (when app is active)
         localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] event in
-            self?.handleUserActivity()
+            Task { @MainActor [weak self] in self?.handleUserActivity() }
             return event // Pass through
         }
 

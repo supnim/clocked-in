@@ -1,6 +1,7 @@
 import SwiftUI
 import UserNotifications
 import Observation
+import OSLog
 
 /// Data for displaying an in-app notification about friend activity changes
 struct FriendActivityNotification: Equatable {
@@ -57,14 +58,16 @@ final class NotchNotificationManager {
     @ObservationIgnored
     private var currentUserBundleId: String?
 
+    private let log = Logger(subsystem: "com.clockedin", category: "NotchNotificationManager")
+
     private init() {
         requestNotificationPermission()
     }
 
     private func requestNotificationPermission() {
-        center.requestAuthorization(options: [.alert, .sound]) { granted, error in
+        center.requestAuthorization(options: [.alert, .sound]) { [self] granted, error in
             if let error = error {
-                print("Notification permission error: \(error)")
+                log.error("Notification permission error: \(error)")
             }
         }
     }
@@ -134,6 +137,11 @@ final class NotchNotificationManager {
         guard bundleId != currentUserBundleId else { return }
         currentUserBundleId = bundleId
         // Reset notifications sent when user switches apps (new session)
+        joinNotificationsSent.removeAll()
+    }
+
+    /// Clear stale join tracking when user transitions from invisible → visible
+    func clearJoinNotificationTracking() {
         joinNotificationsSent.removeAll()
     }
 
@@ -213,8 +221,6 @@ final class NotchNotificationManager {
     }
 
     private func isUserActive() -> Bool {
-        // Check if user has been active in last 15 minutes (same as idle detection)
-        // This would integrate with IdleDetector
-        return true // For now, always allow
+        return IdleDetector.shared.isUserActive
     }
 }
