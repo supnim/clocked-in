@@ -1,5 +1,6 @@
 """Database connection pool using asyncpg."""
 
+import json
 from typing import AsyncGenerator
 
 import asyncpg
@@ -11,6 +12,16 @@ from app.config import config
 _pool: Pool | None = None
 
 
+async def _init_connection(conn: asyncpg.Connection) -> None:
+    """Register codecs so jsonb columns decode to dicts instead of raw strings."""
+    await conn.set_type_codec(
+        "jsonb",
+        encoder=json.dumps,
+        decoder=json.loads,
+        schema="pg_catalog",
+    )
+
+
 async def init_db() -> Pool:
     """Initialize the database connection pool."""
     global _pool
@@ -19,6 +30,7 @@ async def init_db() -> Pool:
         min_size=5,
         max_size=20,
         command_timeout=60,
+        init=_init_connection,
     )
     return _pool
 
