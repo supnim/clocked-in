@@ -1,7 +1,6 @@
 import Foundation
 
 /// Centralized configuration for app-wide settings
-/// TODO: Make configurable via Info.plist or environment variables for different build configurations
 final class AppConfig {
     static let shared = AppConfig()
 
@@ -9,8 +8,12 @@ final class AppConfig {
     let wsBaseURL: URL
 
     private init() {
-        // Default to localhost for development
+        #if DEBUG
         self.apiBaseURL = URL(string: "http://localhost:8000")!
         self.wsBaseURL = URL(string: "ws://localhost:8000")!
+        #else
+        self.apiBaseURL = URL(string: "https://api.clockedin.studio.gold")!
+        self.wsBaseURL = URL(string: "wss://api.clockedin.studio.gold")!
+        #endif
     }
 }
