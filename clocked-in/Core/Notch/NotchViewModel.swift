@@ -48,7 +48,7 @@ class NotchViewModel {
         setupDeepLinkObservers()
     }
 
-    deinit {
+    isolated deinit {
         if let monitor = keyMonitor {
             NSEvent.removeMonitor(monitor)
         }
@@ -108,30 +108,35 @@ class NotchViewModel {
 
     private func setupKeyboardMonitor() {
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            MainActor.assumeIsolated { () -> NSEvent? in
-                guard let self else { return event }
+            // NSEvent isn't Sendable, so we can't return it from `assumeIsolated`
+            // (its result type must be Sendable). Decide whether to swallow the
+            // event on the main actor, then apply that decision out here.
+            let shouldSwallow = MainActor.assumeIsolated { () -> Bool in
+                guard let self else { return false }
 
                 // Escape closes the notch
                 if event.keyCode == 53, self.status == .opened {
                     self.notchClose()
-                    return nil
+                    return true
                 }
 
                 // Cmd shortcuts
                 if event.modifierFlags.contains(.command) {
                     switch event.keyCode {
                     case 12:  // Cmd+Q
-                        NSApp.terminate(nil); return nil
+                        NSApp.terminate(nil); return true
                     case 13:  // Cmd+W
-                        if self.status == .opened { self.notchClose(); return nil }
+                        if self.status == .opened { self.notchClose(); return true }
                     case 43:  // Cmd+,
-                        self.showContent(.settings); return nil
+                        self.showContent(.settings); return true
                     default: break
                     }
                 }
 
-                return event
+                return false
             }
+
+            return shouldSwallow ? nil : event
         }
     }
 

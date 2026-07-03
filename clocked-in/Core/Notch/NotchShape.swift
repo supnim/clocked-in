@@ -1,6 +1,6 @@
 import SwiftUI
 
-struct NotchShape: Shape {
+nonisolated struct NotchShape: Shape {
     let topCornerRadius: CGFloat
     let bottomCornerRadius: CGFloat
 
