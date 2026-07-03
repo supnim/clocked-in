@@ -1,4 +1,10 @@
-"""FastAPI main application."""
+"""FastAPI main application.
+
+Must run as a single uvicorn worker: nudge delivery uses an in-memory
+ConnectionManager (app/ws/manager.py). Presence updates are multi-worker-safe
+via Redis pub/sub; nudges are not. Move nudges to a Redis channel before
+scaling workers.
+"""
 
 import logging
 from contextlib import asynccontextmanager
@@ -7,9 +13,8 @@ from typing import AsyncGenerator
 logger = logging.getLogger(__name__)
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, Depends
-from fastapi.middleware.cors import CORSMiddleware
 
-from app.config import validate as validate_config
+from app.config import config, validate as validate_config
 from app.database import close_db, get_pool, init_db
 from app.api.deps import get_current_user
 from app.redis_client import close_redis, get_redis, init_redis
@@ -26,6 +31,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan handler for startup and shutdown."""
     # Startup
     validate_config()
+    logger.warning(
+        "Starting Clocked-In API (debug=%s, jwt_secret_is_default=%s)",
+        config.DEBUG,
+        config.JWT_SECRET == "dev-secret-change-in-production",
+    )
     pool = await init_db()
     await init_redis()
     # Set database pool on presence manager for friend lookups
@@ -42,15 +52,6 @@ app = FastAPI(
     description="Backend API for Clocked-In presence application",
     version="1.0.0",
     lifespan=lifespan,
-)
-
-# CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # TODO: Restrict in production
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
 )
 
 # Include routers

@@ -10,8 +10,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
+from app.api.deps import get_current_user
 from app.auth.apple import verify_apple_identity_token
-from app.auth.jwt import create_access_token, get_current_user
+from app.auth.jwt import create_access_token
 from app.auth.oauth import (
     exchange_code_for_tokens,
     get_google_auth_url,
