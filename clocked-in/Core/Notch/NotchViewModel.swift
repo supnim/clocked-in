@@ -41,8 +41,9 @@ class NotchViewModel {
     @ObservationIgnored
     private var deepLinkObservers: [NSObjectProtocol] = []
 
-    init(geometry: NotchGeometry) {
+    init(geometry: NotchGeometry, installMonitors: Bool = true) {
         self.geometry = geometry
+        guard installMonitors else { return }
         setupEventHandlers()
         setupKeyboardMonitor()
         setupDeepLinkObservers()
