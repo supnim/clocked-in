@@ -1,58 +1,93 @@
 # Clocked In
 
-Track your workday progress right from your menu bar.
+See what your friends are working on, right from your Mac's notch.
 
-![macOS](https://img.shields.io/badge/macOS-26.0+-blue)
+![macOS](https://img.shields.io/badge/macOS-15.0+-blue)
 ![Swift](https://img.shields.io/badge/Swift-6-orange)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
+## What it is
+
+Clocked In is a macOS presence app that lives in the notch. Add friends, and it
+shows you what app they're currently using, in real time — with idle/away
+states, nudges, and a fully honest privacy model (see below).
+
 ## Features
 
-- **Day view** - See your daily progress as a percentage
-- **Week view** - Track weekly progress (5-day or 7-day work weeks)
-- **Month & Year views** - Monitor longer-term progress
-- **Click to cycle** - Left-click cycles between views
-- **Overtime indicator** - Shows "Overtime" when you've passed your end time
-- **Lightweight** - Simple, distraction-free menu bar app
+- **Live friend presence** — see what app each friend is using, updated in real time over WebSocket
+- **Friend requests** — search by username, or share a `clockedin://add/{username}` deep link
+- **Nudges** — poke a friend (shake + sound + notification, each toggleable)
+- **Idle / away detection** — friends show as away after a period of inactivity
+- **Invisible mode** — one toggle stops all presence sharing entirely
+- **Per-app hiding** — pick apps that never get reported, even to friends
+- **Offline-friendly** — cached friends list and an offline banner when disconnected
 
-## Installation
+## Tech Stack
 
-Download from the [Mac App Store](#) or build from source:
+- **Client**: Swift 6, SwiftUI + AppKit (for notch/system integration), macOS 15+
+- **Backend**: FastAPI, PostgreSQL, Redis, WebSockets for real-time presence
+- **Auth**: device-based on first run (no sign-up form, no passwords)
+
+## Local Development
+
+### Backend
 
 ```bash
-git clone https://github.com/supnim/clocked-in.git
-cd clocked-in
-open clocked-in.xcodeproj
+cd backend
+cp .env.example .env   # fill in JWT secret / Google OAuth creds as needed
+docker compose up
 ```
 
-Build and run with Xcode 26+.
+This starts Postgres, Redis, and the API on `localhost:8000`.
 
-## Requirements
+### Client
 
-- macOS 26.0 or later
-- Apple Silicon or Intel Mac
+Open `clocked-in.xcodeproj` in Xcode 26+ and run. Debug builds automatically
+target `localhost:8000`; Release builds target the hosted backend.
 
-## Usage
+## Distribution
 
-1. **First launch** - Set your work start and end times
-2. **Left-click** - Cycle through Day → Week → Month → Year views
-3. **Right-click** - Access Settings, About, and Quit
+Clocked In ships on the **Mac App Store**.
 
-## Privacy Policy
+To produce a store build:
 
-**Clocked In does not collect, store, or transmit any personal data.**
+```bash
+scripts/release.sh appstore                     # archive + export a .pkg to ./dist/appstore
+APPSTORE_UPLOAD=1 scripts/release.sh appstore   # archive + upload straight to App Store Connect
+```
 
-All settings (work hours, display preferences) are stored locally on your device using macOS UserDefaults. No data ever leaves your computer.
+This archives the Release configuration with automatic signing (team
+`67QQB49ZUJ`) and exports with `ExportOptions-AppStore.plist`
+(`app-store-connect`). Without `APPSTORE_UPLOAD=1`, upload the exported
+package via Xcode's Organizer, Transporter, or `xcrun altool --upload-app`.
 
-- No analytics or tracking
-- No network connections
-- No data collection whatsoever
+A Developer ID–signed, notarized DMG can still be built for direct
+distribution with `scripts/release.sh dmg`.
 
-Your privacy is fully respected.
+## Privacy
+
+Clocked In shares real activity data with real people, so here's exactly what
+that means:
+
+- **What's shared**: the app you're currently using (name + icon) and your
+  online / away status. Window titles and browser URLs are never collected
+  or shared.
+- **Who it's shared with**: only friends who have mutually accepted your
+  friend request, via your own backend instance — never a third party.
+- **Hidden apps**: any app you add to your hidden list is filtered out
+  client-side, before anything is ever uploaded. Friends just see nothing for
+  that period.
+- **Invisible mode**: a single toggle that stops all presence sharing —
+  friends see you as offline.
+- **Data lifetime**: presence data lives in Redis with a 45-second TTL. There
+  is no long-term activity history stored server-side.
+- **No analytics or tracking.**
+- **Your controls**: block or report any user, and delete your account (and
+  all its server-side data) at any time from Settings.
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+Released under the MIT License.
 
 ## Author
 
