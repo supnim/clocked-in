@@ -1,7 +1,11 @@
 import Foundation
 import AppKit
+import CoreGraphics
 import OSLog
 
+/// Detects user idleness by polling the system's "seconds since last input event"
+/// (`CGEventSource.secondsSinceLastEventType`). Works in the App Sandbox without
+/// Input Monitoring / Accessibility permissions (no global event monitors).
 @MainActor
 @Observable
 final class IdleDetector {
@@ -9,17 +13,17 @@ final class IdleDetector {
 
     private let logger = Logger(subsystem: "com.clockedin", category: "IdleDetector")
 
-    private var lastActivityTime: Date = Date()
-    private var idleTimer: Timer?
+    @ObservationIgnored
+    private var pollTimer: Timer?
     private let idleThreshold: TimeInterval = 15 * 60 // 15 minutes
-
-    // Event monitors
-    private var mouseMonitor: Any?
-    private var keyboardMonitor: Any?
-    private var localMonitor: Any?
+    private let pollInterval: TimeInterval = 15
 
     @ObservationIgnored
     private var isRunning = false
+
+    /// Last idle state reported to PresenceManager
+    @ObservationIgnored
+    private var isIdle = false
 
     private init() {
         // Don't start automatically - wait for explicit start() call
@@ -30,9 +34,8 @@ final class IdleDetector {
     func start() {
         guard !isRunning else { return }
         isRunning = true
-        lastActivityTime = Date()
-        setupActivityMonitoring()
-        startIdleTimer()
+        isIdle = false
+        startPolling()
         logger.debug("IdleDetector started")
     }
 
@@ -44,95 +47,61 @@ final class IdleDetector {
     }
 
     nonisolated deinit {
-        // Deinit is nonisolated - event monitors and timer will be cleaned up when deallocated
+        // Singleton; timer is invalidated in stop()/cleanup()
     }
 
     var isUserActive: Bool {
-        Date().timeIntervalSince(lastActivityTime) < idleThreshold
+        Self.systemIdleTime() < idleThreshold
     }
 
     var timeSinceLastActivity: TimeInterval {
-        Date().timeIntervalSince(lastActivityTime)
+        Self.systemIdleTime()
     }
 
-    // MARK: - Activity Monitoring
-
-    private func setupActivityMonitoring() {
-        // Monitor mouse events
-        mouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDown, .rightMouseDown]) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.handleUserActivity() }
-        }
-
-        // Monitor keyboard events
-        keyboardMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown]) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.handleUserActivity() }
-        }
-
-        // Also monitor local events (when app is active)
-        localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] event in
-            Task { @MainActor [weak self] in self?.handleUserActivity() }
-            return event // Pass through
-        }
-
-        logger.debug("Activity monitoring started")
+    /// Seconds since the last keyboard/mouse/other input event in this login session.
+    nonisolated static func systemIdleTime() -> TimeInterval {
+        CGEventSource.secondsSinceLastEventType(
+            .combinedSessionState,
+            eventType: CGEventType(rawValue: ~0)!
+        )
     }
 
-    private func handleUserActivity() {
-        // Check if we were idle BEFORE updating lastActivityTime
-        let wasIdle = !isUserActive
+    // MARK: - Polling
 
-        lastActivityTime = Date()
-
-        // If we were idle, notify that user is now active
-        if wasIdle {
-            logger.debug("User became active after idle period")
-            Task {
-                await PresenceManager.shared.handleIdleStateChange(false)
+    private func startPolling() {
+        pollTimer?.invalidate()
+        pollTimer = Timer.scheduledTimer(withTimeInterval: pollInterval, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.checkIdleStatus()
             }
         }
+        checkIdleStatus()
     }
 
-    // MARK: - Idle Timer
+    private func checkIdleStatus() {
+        guard isRunning else { return }
+        let idleTime = Self.systemIdleTime()
+        let idleNow = idleTime >= idleThreshold
+        guard idleNow != isIdle else { return }
+        isIdle = idleNow
 
-    private func startIdleTimer() {
-        idleTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
-            Task { await self?.checkIdleStatus() }
+        if idleNow {
+            logger.debug("User idle for \(Int(idleTime / 60)) minutes")
+        } else {
+            logger.debug("User became active after idle period")
         }
-    }
 
-    private func checkIdleStatus() async {
-        let timeSinceActivity = Date().timeIntervalSince(lastActivityTime)
-
-        if timeSinceActivity >= idleThreshold {
-            logger.debug("User idle for \(Int(timeSinceActivity / 60)) minutes")
-            await PresenceManager.shared.handleIdleStateChange(true)
+        Task {
+            await PresenceManager.shared.handleIdleStateChange(idleNow)
         }
     }
 
     // MARK: - Cleanup
 
     func cleanup() {
-        // Invalidate timer
-        idleTimer?.invalidate()
-        idleTimer = nil
-
-        // Remove event monitors
-        if let mouseMonitor {
-            NSEvent.removeMonitor(mouseMonitor)
-            self.mouseMonitor = nil
-        }
-
-        if let keyboardMonitor {
-            NSEvent.removeMonitor(keyboardMonitor)
-            self.keyboardMonitor = nil
-        }
-
-        if let localMonitor {
-            NSEvent.removeMonitor(localMonitor)
-            self.localMonitor = nil
-        }
-
-        logger.debug("Activity monitoring stopped")
+        pollTimer?.invalidate()
+        pollTimer = nil
+        isIdle = false
+        logger.debug("Idle polling stopped")
     }
-
 }

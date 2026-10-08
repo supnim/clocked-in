@@ -1,3 +1,6 @@
+// v1 App Store build: browser-URL sharing is cut (needs Apple Events entitlements).
+// Only compiled into direct-distribution builds that define DIRECT_DISTRIBUTION.
+#if DIRECT_DISTRIBUTION
 import Foundation
 
 class BrowserURLFetcher {
@@ -67,3 +70,4 @@ class BrowserURLFetcher {
         return result.stringValue
     }
 }
+#endif

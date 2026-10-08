@@ -1,6 +1,77 @@
 import Foundation
 import Observation
 
+// MARK: - Presence Payload (pure, unit tested)
+
+/// What the client sends in `{"type":"presence_update","data":{...}}`.
+/// Privacy rules live here so they apply on every path (active, idle, reconnect):
+/// - hidden app → status "ghost", no app fields
+/// - window title / browser domain are never sent (v1 App Store build)
+/// - icons whose base64 exceeds 16 KB are dropped
+struct PresencePayload: Equatable {
+    enum Status: String {
+        case online
+        case away
+        case ghost
+    }
+
+    /// Max base64 icon length the client will send (server limit is 24000 chars)
+    static let maxIconBase64Length = 16 * 1024
+
+    let status: Status
+    let appName: String?
+    let bundleId: String?
+    /// Base64-encoded PNG
+    let appIcon: String?
+
+    static let ghost = PresencePayload(status: .ghost, appName: nil, bundleId: nil, appIcon: nil)
+
+    /// Builds the payload for the user's current activity.
+    /// - Parameters:
+    ///   - activity: Latest frontmost-app activity (nil if unknown)
+    ///   - isIdle: Whether the user is idle (→ "away")
+    ///   - hiddenApps: Bundle IDs the user hid; these always produce "ghost"
+    static func make(activity: Activity?, isIdle: Bool, hiddenApps: [String]) -> PresencePayload {
+        if let activity, !activity.bundleId.isEmpty, hiddenApps.contains(activity.bundleId) {
+            return .ghost
+        }
+
+        let status: Status = isIdle ? .away : .online
+
+        guard let activity, !activity.bundleId.isEmpty || !activity.appName.isEmpty else {
+            return PresencePayload(status: status, appName: nil, bundleId: nil, appIcon: nil)
+        }
+
+        let icon: String? = activity.appIcon.flatMap { data in
+            let base64 = data.base64EncodedString()
+            return base64.count <= maxIconBase64Length ? base64 : nil
+        }
+
+        return PresencePayload(
+            status: status,
+            appName: activity.appName.isEmpty ? nil : String(activity.appName.prefix(100)),
+            bundleId: activity.bundleId.isEmpty ? nil : String(activity.bundleId.prefix(255)),
+            appIcon: icon
+        )
+    }
+
+    /// `data` dictionary sent to the server. Only contract keys; nil fields omitted.
+    func dataDictionary() -> [String: Any] {
+        var data: [String: Any] = ["status": status.rawValue]
+        if let appName { data["app_name"] = appName }
+        if let bundleId { data["bundle_id"] = bundleId }
+        if let appIcon { data["app_icon"] = appIcon }
+        return data
+    }
+
+    /// Full WebSocket message
+    func message() -> [String: Any] {
+        ["type": "presence_update", "data": dataDictionary()]
+    }
+}
+
+// MARK: - Presence Manager
+
 @MainActor
 @Observable
 final class PresenceManager {
@@ -25,9 +96,10 @@ final class PresenceManager {
 
     // MARK: - Offline Update Queue
 
-    /// Pending presence update queued while offline (only latest matters)
+    /// Set when an update couldn't be sent while offline. On reconnect the *current*
+    /// state is sent (not the stale queued one).
     @ObservationIgnored
-    private var pendingUpdate: Activity?
+    private var pendingUpdate: PresencePayload?
 
     /// Whether there is a pending update waiting to be sent
     var hasPendingUpdates: Bool {
@@ -36,7 +108,16 @@ final class PresenceManager {
 
     private init() {}
 
-    // MARK: - Activity Integration (Updated for WebSocket)
+    /// The payload that represents the user's presence right now.
+    func currentPayload() -> PresencePayload {
+        PresencePayload.make(
+            activity: lastActivity,
+            isIdle: isIdle,
+            hiddenApps: AppSettings.shared.hiddenApps
+        )
+    }
+
+    // MARK: - Activity Integration
 
     func updatePresence(for activity: Activity) async {
         // Store for idle recovery and UI
@@ -46,58 +127,55 @@ final class PresenceManager {
         // Update notification manager with current app (for join notifications)
         await NotchNotificationManager.shared.updateCurrentUserApp(activity.bundleId)
 
-        // Check invisible mode first - don't send any presence
+        // Invisible: share nothing (go_offline was sent when invisible mode was enabled)
         guard !AppSettings.shared.isInvisible else {
-            await setOffline()
+            pendingUpdate = nil
             return
         }
 
-        // If user is idle, don't update presence (keep showing away)
-        guard !isIdle else { return }
-
-        // Send presence update immediately (ActivityMonitor already debounces)
-        await sendPresenceUpdate(for: activity)
+        // Send immediately (ActivityMonitor already debounces)
+        await publishCurrentPresence()
     }
 
-    private func sendPresenceUpdate(for activity: Activity) async {
-        // Queue update if offline
+    /// Sends the current presence, or queues it if the socket is down.
+    private func publishCurrentPresence() async {
+        guard !AppSettings.shared.isInvisible else {
+            pendingUpdate = nil
+            return
+        }
+
+        let payload = currentPayload()
         guard WebSocketClient.shared.isConnected else {
-            queuePendingUpdate(activity)
+            pendingUpdate = payload
             return
         }
 
-        // Check if app is hidden (ghost mode) - privacy-first approach
-        if AppSettings.shared.hiddenApps.contains(activity.bundleId) {
-            await sendGhostPresence()
+        pendingUpdate = nil
+        await WebSocketClient.shared.sendPresence(payload)
+    }
+
+    // MARK: - Connection Events
+
+    /// Called by WebSocketClient whenever a (re)connection is established.
+    /// Re-asserts our presence (the server forgets it when the old socket closed),
+    /// or re-sends go_offline when invisible.
+    func connectionDidOpen() async {
+        if AppSettings.shared.isInvisible {
+            pendingUpdate = nil
+            await WebSocketClient.shared.sendGoOffline()
             return
         }
-
-        // Build activity with privacy filtering applied
-        let filteredActivity = Activity(
-            appName: activity.appName,
-            bundleId: activity.bundleId,
-            windowTitle: AppSettings.shared.shareWindowTitle ? activity.windowTitle : nil,
-            browserDomain: AppSettings.shared.shareBrowserURL ? activity.browserDomain : nil,
-            appIcon: activity.appIcon
-        )
-
-        await WebSocketClient.shared.sendPresenceUpdate(filteredActivity, status: "online")
+        guard lastActivity != nil || pendingUpdate != nil else { return }
+        await publishCurrentPresence()
     }
 
     // MARK: - Pending Updates Queue
 
-    private func queuePendingUpdate(_ activity: Activity) {
-        pendingUpdate = activity
-    }
-
     /// Flush pending update when reconnecting
-    /// Called by NetworkMonitor when connection is restored
     func flushPendingUpdates() async {
         guard WebSocketClient.shared.isConnected else { return }
-        guard let activity = pendingUpdate else { return }
-
-        pendingUpdate = nil
-        await sendPresenceUpdate(for: activity)
+        guard pendingUpdate != nil else { return }
+        await publishCurrentPresence()
     }
 
     /// Clear pending updates (e.g., when user goes invisible)
@@ -105,18 +183,22 @@ final class PresenceManager {
         pendingUpdate = nil
     }
 
-    private func sendGhostPresence() async {
-        guard WebSocketClient.shared.isConnected else { return }
+    // MARK: - Invisible Mode
 
-        // Send ghost status with no activity details
-        let emptyActivity = Activity(
-            appName: "",
-            bundleId: "",
-            windowTitle: nil,
-            browserDomain: nil,
-            appIcon: nil
-        )
-        await WebSocketClient.shared.sendPresenceUpdate(emptyActivity, status: "ghost")
+    /// Called by AppSettings when `isInvisible` changes.
+    /// - Invisible on: drop queued updates and tell the server to remove our presence.
+    ///   The socket stays open so friends' presence keeps streaming to us.
+    /// - Invisible off: reconnect if needed and re-send current presence.
+    func handleInvisibleModeChanged(_ invisible: Bool) async {
+        if invisible {
+            pendingUpdate = nil
+            await WebSocketClient.shared.sendGoOffline()
+        } else if WebSocketClient.shared.isConnected {
+            await publishCurrentPresence()
+        } else {
+            // connectionDidOpen() will send presence once connected
+            WebSocketClient.shared.reconnect()
+        }
     }
 
     // MARK: - Connection Management
@@ -128,67 +210,29 @@ final class PresenceManager {
     }
 
     func stopPresence() {
+        pendingUpdate = nil
         Task {
             await setOffline()
         }
     }
 
+    /// Removes our presence on the server immediately (friends see us offline).
     func setOffline() async {
+        pendingUpdate = nil
         guard WebSocketClient.shared.isConnected else { return }
-
-        let emptyActivity = Activity(
-            appName: "",
-            bundleId: "",
-            windowTitle: nil,
-            browserDomain: nil,
-            appIcon: nil
-        )
-        await WebSocketClient.shared.sendPresenceUpdate(emptyActivity, status: "offline")
+        await WebSocketClient.shared.sendGoOffline()
     }
 
     // MARK: - Idle State Handling
 
     func handleIdleStateChange(_ idle: Bool) async {
-        // Skip if invisible mode
-        guard !AppSettings.shared.isInvisible else { return }
-
+        guard idle != isIdle else { return }
         isIdle = idle
 
-        if idle {
-            // User became idle - send away status
-            await setAway()
-        } else {
-            // User became active - restore online status with last activity
-            if let activity = lastActivity {
-                await sendPresenceUpdate(for: activity)
-            }
-        }
-    }
+        // Invisible: track state but share nothing
+        guard !AppSettings.shared.isInvisible else { return }
 
-    private func setAway() async {
-        guard WebSocketClient.shared.isConnected else { return }
-
-        // Send away status - keep activity info but mark as away
-        let activity = lastActivity ?? Activity(
-            appName: "",
-            bundleId: "",
-            windowTitle: nil,
-            browserDomain: nil,
-            appIcon: nil
-        )
-
-        // Apply privacy filtering if we have an activity
-        if let lastActivity, !AppSettings.shared.hiddenApps.contains(lastActivity.bundleId) {
-            let filteredActivity = Activity(
-                appName: lastActivity.appName,
-                bundleId: lastActivity.bundleId,
-                windowTitle: AppSettings.shared.shareWindowTitle ? lastActivity.windowTitle : nil,
-                browserDomain: AppSettings.shared.shareBrowserURL ? lastActivity.browserDomain : nil,
-                appIcon: lastActivity.appIcon
-            )
-            await WebSocketClient.shared.sendPresenceUpdate(filteredActivity, status: "away")
-        } else {
-            await WebSocketClient.shared.sendPresenceUpdate(activity, status: "away")
-        }
+        // Same privacy filtering as the active path (hidden app → ghost)
+        await publishCurrentPresence()
     }
 }

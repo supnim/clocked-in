@@ -135,23 +135,23 @@ enum AppError: LocalizedError, Equatable {
     }
 
     /// Creates an AppError from an HTTP status code
+    /// Only 401 is an auth error (token invalid/expired or user gone). 403 is a
+    /// forbidden *action* (e.g. "Cannot send request") and is surfaced as an API error.
     static func from(httpStatusCode: Int, data: Data?) -> AppError {
-        // Try to extract error message from response body
-        var message = ""
-        if let data = data,
-           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let errorMessage = json["message"] as? String ?? json["error"] as? String {
-            message = errorMessage
-        }
+        // FastAPI: {"detail": "..."} or {"detail": [{"msg": ...}]}
+        let message = serverMessage(from: data) ?? ""
 
         switch httpStatusCode {
         case 401:
             return .auth(message: message.isEmpty ? "Session expired" : message)
         case 403:
-            return .auth(message: message.isEmpty ? "Access denied" : message)
+            return .api(statusCode: 403, message: message.isEmpty ? "You can't do that" : message)
         case 404:
+            if !message.isEmpty && message.lowercased() != "not found" {
+                return .api(statusCode: 404, message: message)
+            }
             return .notFound(resource: "Resource")
-        case 422:
+        case 400, 409, 422:
             return .validation(message: message.isEmpty ? "Invalid request" : message)
         case 429:
             return .rateLimited
@@ -160,6 +160,11 @@ enum AppError: LocalizedError, Equatable {
         default:
             return .api(statusCode: httpStatusCode, message: message)
         }
+    }
+
+    /// Extracts the server's error message from a response body (FastAPI `detail`).
+    static func serverMessage(from data: Data?) -> String? {
+        APICoding.serverMessage(from: data)
     }
 
     /// Creates an AppError from a URLError
@@ -216,7 +221,11 @@ final class ErrorHandler {
     var onAuthFailure: (() -> Void)?
 
     private let log = Logger(subsystem: "com.clockedin", category: "ErrorHandler")
+    @ObservationIgnored
     private var autoDismissTask: Task<Void, Never>?
+    @ObservationIgnored
+    private var lastAuthFailureAt: Date?
+    private let authFailureCoalesceInterval: TimeInterval = 5
 
     private init() {}
 
@@ -231,9 +240,13 @@ final class ErrorHandler {
         let appError = AppError.from(error)
         logError(appError, context: context)
 
-        // Handle auth failures specially
+        // Auth failures (401) are handled centrally: APIClient / WebSocketClient attempt a
+        // silent re-auth first and call `reportAuthFailure()` only if that fails. Don't
+        // sign out from here — callers may pass errors that already went through that path.
         if appError.requiresReauth {
-            handleAuthFailure(appError)
+            if showToUser {
+                show(appError, isTransient: false)
+            }
             return
         }
 
@@ -281,12 +294,16 @@ final class ErrorHandler {
         }
     }
 
-    private func handleAuthFailure(_ error: AppError) {
-        currentError = error
-        showingError = true
-        isTransient = false
-
-        // Notify auth failure handler (typically triggers sign-out)
+    /// Called by APIClient / WebSocketClient when a 401 could not be fixed by silent
+    /// re-authentication. Invokes `onAuthFailure` (typically sign-out), coalescing bursts
+    /// of failures from concurrent requests into a single call.
+    func reportAuthFailure() {
+        let now = Date()
+        if let lastAuthFailureAt, now.timeIntervalSince(lastAuthFailureAt) < authFailureCoalesceInterval {
+            return
+        }
+        lastAuthFailureAt = now
+        log.warning("Authentication failed after silent re-auth; notifying handler")
         onAuthFailure?()
     }
 }

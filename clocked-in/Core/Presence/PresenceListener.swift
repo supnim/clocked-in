@@ -16,8 +16,8 @@ protocol UserDataProvider {
     var user: PresenceUserData? { get }
 }
 
+// PresenceUpdate is a typealias of FriendPresenceData
 extension FriendPresenceData: ActivityDataProvider, UserDataProvider {}
-extension PresenceUpdate: ActivityDataProvider, UserDataProvider {}
 
 @MainActor
 @Observable
@@ -46,11 +46,11 @@ final class PresenceListener {
         listenerCount += 1
         guard listenerCount == 1 else { return }
 
-        // Don't listen when invisible
-        guard !AppSettings.shared.isInvisible else { return }
+        // NOTE: invisible mode only hides *our* presence from friends; we still
+        // show friends' presence to the user, so always listen.
 
         // Load cached friends for immediate display
-        if let cachedFriends = CachedFriendsService.shared.loadCachedFriends() {
+        if friendsPresence.isEmpty, let cachedFriends = CachedFriendsService.shared.loadCachedFriends() {
             self.friendsPresence = cachedFriends
             // Populate user cache from cached friends
             for friend in cachedFriends {
@@ -60,6 +60,11 @@ final class PresenceListener {
 
         // Set up WebSocket callbacks
         setupWebSocketCallbacks()
+
+        // Apply an initial_presence that arrived before we attached
+        if let initial = WebSocketClient.shared.latestInitialPresence {
+            handleInitialPresence(initial)
+        }
     }
 
     func stopListening() {
@@ -83,19 +88,15 @@ final class PresenceListener {
 
     private func setupWebSocketCallbacks() {
         // Handle initial presence (full friend list on connect)
+        // (WebSocketClient invokes callbacks on the MainActor, in order — handle synchronously
+        // so an initial_presence can't be applied after a later presence_update.)
         WebSocketClient.shared.onInitialPresence = { [weak self] presences in
-            Task { @MainActor [weak self] in
-                guard let self = self else { return }
-                self.handleInitialPresence(presences)
-            }
+            self?.handleInitialPresence(presences)
         }
 
         // Handle individual presence updates
         WebSocketClient.shared.onPresenceUpdate = { [weak self] update in
-            Task { @MainActor [weak self] in
-                guard let self = self else { return }
-                self.handlePresenceUpdate(update)
-            }
+            self?.handlePresenceUpdate(update)
         }
 
         // Handle nudges
@@ -118,8 +119,9 @@ final class PresenceListener {
                 uid: data.userId,
                 user: user,
                 isOnline: data.online ?? false,
-                lastSeen: Date(timeIntervalSince1970: Double(data.lastSeen ?? 0) / 1000),
-                currentActivity: activity
+                lastSeen: Date(timeIntervalSince1970: Double(data.lastSeen ?? data.updatedAt ?? 0) / 1000),
+                currentActivity: activity,
+                serverStatus: data.presenceStatus
             )
 
             newFriendsPresence.append(friendPresence)
@@ -140,7 +142,8 @@ final class PresenceListener {
             user: user,
             isOnline: update.online ?? false,
             lastSeen: Date(timeIntervalSince1970: Double(update.updatedAt ?? 0) / 1000),
-            currentActivity: activity
+            currentActivity: activity,
+            serverStatus: update.presenceStatus
         )
 
         // Get old activity for notification comparison
@@ -198,8 +201,9 @@ final class PresenceListener {
         return Activity(
             appName: appName,
             bundleId: provider.bundleId ?? "",
-            windowTitle: provider.windowTitle,
-            browserDomain: provider.browserDomain,
+            // v1: window titles / browser domains are never shared
+            windowTitle: nil,
+            browserDomain: nil,
             appIcon: appIconData,
             timestamp: Date(timeIntervalSince1970: Double(provider.updatedAt ?? Int64(Date().timeIntervalSince1970 * 1000)) / 1000)
         )
@@ -272,7 +276,8 @@ final class PresenceListener {
                 isOnline: friendsPresence[index].isOnline,
                 lastSeen: friendsPresence[index].lastSeen,
                 currentActivity: friendsPresence[index].currentActivity,
-                currentlyWith: friendsPresence[index].currentlyWith
+                currentlyWith: friendsPresence[index].currentlyWith,
+                serverStatus: friendsPresence[index].serverStatus
             )
         }
     }

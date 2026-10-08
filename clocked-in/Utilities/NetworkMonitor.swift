@@ -21,7 +21,11 @@ enum ConnectionState: Equatable {
         case .offline:
             return "Offline"
         case .reconnecting(let attempt, let maxAttempts):
-            return "Reconnecting (\(attempt)/\(maxAttempts))..."
+            // maxAttempts == 0 means unbounded (WebSocketClient retries forever)
+            if maxAttempts > 0 {
+                return "Reconnecting (\(attempt)/\(maxAttempts))..."
+            }
+            return attempt > 1 ? "Reconnecting (attempt \(attempt))..." : "Reconnecting..."
         }
     }
 }
@@ -41,7 +45,7 @@ final class NetworkMonitor {
         }
         let ws = WebSocketClient.shared
         if ws.isReconnecting {
-            return .reconnecting(attempt: ws.reconnectAttempts, maxAttempts: ws.maxReconnectAttempts)
+            return .reconnecting(attempt: ws.reconnectAttempts, maxAttempts: 0)
         }
         return ws.isConnected ? .online : .offline
     }
@@ -63,10 +67,11 @@ final class NetworkMonitor {
         queue = DispatchQueue(label: "NetworkMonitor")
 
         monitor?.pathUpdateHandler = { [weak self] path in
+            let satisfied = path.status == .satisfied
             Task { @MainActor in
                 guard let self = self else { return }
                 let wasOffline = self.isOffline
-                self.isOffline = path.status != .satisfied
+                self.isOffline = !satisfied
 
                 // If coming back online, trigger reconnection
                 if wasOffline && !self.isOffline {
@@ -85,14 +90,10 @@ final class NetworkMonitor {
     }
 
     private func handleReconnection() async {
-        // Reconnect WebSocket
-        WebSocketClient.shared.reconnect()
-
-        // Wait a moment for connection to establish
-        try? await Task.sleep(for: .milliseconds(500))
-
-        // Flush any pending presence updates
-        await PresenceManager.shared.flushPendingUpdates()
+        // Reconnect WebSocket immediately (skips any pending backoff). Presence is
+        // re-sent / the queue flushed by PresenceManager.connectionDidOpen() once the
+        // server confirms the connection.
+        WebSocketClient.shared.handleNetworkAvailable()
 
         // Mark as online in cache service
         CachedFriendsService.shared.markOnline()
