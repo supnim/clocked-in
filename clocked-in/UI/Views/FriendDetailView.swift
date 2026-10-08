@@ -2,12 +2,18 @@ import SwiftUI
 
 struct FriendDetailView: View {
     let friendPresence: FriendPresence
-    @Environment(\.dismiss) private var dismiss
+    /// Navigates away (back to the lobby) after the friend is removed or blocked.
+    var onClose: () -> Void = {}
     @State private var showNudgeFeedback = false
     @State private var isNudging = false
     @State private var nudgeError: AppError?
     @State private var removeError: AppError?
     @State private var showRemoveConfirmation = false
+    @State private var showBlockConfirmation = false
+    @State private var isBlocking = false
+    @State private var blockError: AppError?
+    @State private var showReportSheet = false
+    @State private var reportConfirmation: String?
 
     /// Whether network-dependent actions are available
     private var canPerformActions: Bool {
@@ -113,6 +119,18 @@ struct FriendDetailView: View {
                         )
                     }
 
+                    if let error = blockError {
+                        ErrorBanner(
+                            error: error,
+                            onDismiss: { blockError = nil },
+                            isCompact: true
+                        )
+                    }
+
+                    if let message = reportConfirmation {
+                        InlineErrorText(message: message, isSuccess: true)
+                    }
+
                     // Offline notice if applicable
                     if !canPerformActions && nudgeError == nil && removeError == nil {
                         HStack(spacing: 6) {
@@ -175,10 +193,73 @@ struct FriendDetailView: View {
                         Text("You will no longer see each other's activity.")
                     }
                     .help("Remove friend")
+
+                    // Safety actions
+                    HStack(spacing: 8) {
+                        Button(action: { showBlockConfirmation = true }) {
+                            HStack(spacing: 4) {
+                                if isBlocking {
+                                    ProgressView()
+                                        .scaleEffect(0.5)
+                                        .frame(width: 12, height: 12)
+                                } else {
+                                    Image(systemName: "hand.raised.fill")
+                                }
+                                Text("Block")
+                            }
+                            .font(.caption)
+                            .foregroundColor(.red)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                            .background(Color.red.opacity(0.1))
+                            .cornerRadius(6)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!canPerformActions || isBlocking)
+                        .opacity(canPerformActions ? 1 : 0.5)
+                        .confirmationDialog(
+                            "Block @\(friendPresence.user.username)?",
+                            isPresented: $showBlockConfirmation
+                        ) {
+                            Button("Block", role: .destructive) { blockFriend() }
+                            Button("Cancel", role: .cancel) {}
+                        } message: {
+                            Text("They'll be removed from your friends, won't be able to find you, send you requests or nudge you, and won't see your activity. You can unblock them in Settings.")
+                        }
+                        .help("Block this user")
+                        .accessibilityLabel("Block \(friendPresence.user.name)")
+
+                        Button(action: { showReportSheet = true }) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "exclamationmark.bubble.fill")
+                                Text("Report…")
+                            }
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                            .background(Color.orange.opacity(0.1))
+                            .cornerRadius(6)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!canPerformActions)
+                        .opacity(canPerformActions ? 1 : 0.5)
+                        .help("Report this user")
+                        .accessibilityLabel("Report \(friendPresence.user.name)")
+                    }
                 }
                 .padding(.top, 8)
             }
             .padding(.horizontal, 4)
+        }
+        .sheet(isPresented: $showReportSheet) {
+            ReportUserView(
+                userId: friendPresence.uid,
+                username: friendPresence.user.username,
+                onReported: {
+                    reportConfirmation = "Thanks — your report was sent."
+                }
+            )
         }
     }
 
@@ -237,10 +318,7 @@ struct FriendDetailView: View {
     }
 
     private func removeFriend() {
-        guard let friendId = friendPresence.user.id else {
-            removeError = .unknown(message: "Cannot identify friend")
-            return
-        }
+        let friendId = friendPresence.uid
         guard canPerformActions else {
             removeError = .network(message: "Cannot remove friend while offline")
             return
@@ -251,10 +329,36 @@ struct FriendDetailView: View {
         Task {
             do {
                 try await FriendService.shared.removeFriend(friendId)
-                dismiss()
+                FriendService.shared.forgetFriendLocally(friendId)
+                onClose()
             } catch let err {
                 removeError = AppError.from(err)
                 ErrorHandler.shared.handle(err, context: "removeFriend", showToUser: false)
+            }
+        }
+    }
+
+    private func blockFriend() {
+        let friendId = friendPresence.uid
+        guard canPerformActions else {
+            blockError = .network(message: "Cannot block while offline")
+            return
+        }
+        guard !isBlocking else { return }
+
+        isBlocking = true
+        blockError = nil
+
+        Task {
+            do {
+                try await FriendService.shared.blockUser(friendId)
+                FriendService.shared.forgetFriendLocally(friendId)
+                isBlocking = false
+                onClose()
+            } catch let err {
+                isBlocking = false
+                blockError = AppError.from(err)
+                ErrorHandler.shared.handle(err, context: "blockUser", showToUser: false)
             }
         }
     }

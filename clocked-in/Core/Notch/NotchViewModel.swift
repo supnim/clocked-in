@@ -22,6 +22,9 @@ class NotchViewModel {
     // Dynamic height support
     var isExpanded: Bool = false
 
+    /// Username from a `clockedin://add/{username}` deep link, consumed by AddFriendView.
+    var pendingAddFriendUsername: String?
+
     private let events = EventMonitors.shared
     private var cancellables = Set<AnyCancellable>()
 
@@ -36,7 +39,8 @@ class NotchViewModel {
 
     private let hoverDelay: TimeInterval = 1.0
 
-    let geometry: NotchGeometry
+    /// Rebuilt by NotchWindowController when screens change.
+    var geometry: NotchGeometry
 
     @ObservationIgnored
     private var deepLinkObservers: [NSObjectProtocol] = []
@@ -61,30 +65,29 @@ class NotchViewModel {
     // MARK: - Deep Link Observers
 
     private func setupDeepLinkObservers() {
+        // Posted by DeepLinkHandler for clockedin://add/{username}. userInfo["username"]: String
         let addFriendObserver = NotificationCenter.default.addObserver(
-            forName: DeepLinkHandler.addFriendNotification,
+            forName: Notification.Name("openAddFriend"),
             object: nil,
             queue: .main
         ) { [weak self] notification in
-            guard let username = notification.userInfo?["username"] as? String else { return }
+            let raw = notification.userInfo?["username"] as? String
             MainActor.assumeIsolated {
-                _ = username  // Username available for pre-filling AddFriendView if needed
-                self?.showContent(.addFriend)
+                self?.openAddFriend(prefilledUsername: raw)
             }
         }
         deepLinkObservers.append(addFriendObserver)
+    }
 
-        let inviteCodeObserver = NotificationCenter.default.addObserver(
-            forName: DeepLinkHandler.inviteCodeNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] notification in
-            guard let _ = notification.userInfo?["code"] as? String else { return }
-            MainActor.assumeIsolated {
-                self?.showContent(.addFriend)
-            }
+    /// Opens the Add Friend screen, optionally pre-filled with a (sanitised) username.
+    func openAddFriend(prefilledUsername raw: String?) {
+        guard AuthManager.shared.isAuthenticated, !isUsernameRequired else { return }
+        if let raw {
+            let allowed = Set("abcdefghijklmnopqrstuvwxyz0123456789_")
+            let cleaned = String(raw.lowercased().filter { allowed.contains($0) }.prefix(20))
+            pendingAddFriendUsername = cleaned.isEmpty ? nil : cleaned
         }
-        deepLinkObservers.append(inviteCodeObserver)
+        showContent(.addFriend)
     }
 
     // MARK: - Sizes
@@ -115,8 +118,8 @@ class NotchViewModel {
             let shouldSwallow = MainActor.assumeIsolated { () -> Bool in
                 guard let self else { return false }
 
-                // Escape closes the notch
-                if event.keyCode == 53, self.status == .opened {
+                // Escape closes the notch (unless a username is still required)
+                if event.keyCode == 53, self.status == .opened, !self.isUsernameRequired {
                     self.notchClose()
                     return true
                 }
@@ -127,8 +130,9 @@ class NotchViewModel {
                     case 12:  // Cmd+Q
                         NSApp.terminate(nil); return true
                     case 13:  // Cmd+W
-                        if self.status == .opened { self.notchClose(); return true }
+                        if self.status == .opened, !self.isUsernameRequired { self.notchClose(); return true }
                     case 43:  // Cmd+,
+                        guard !self.isUsernameRequired else { return true }
                         self.showContent(.settings); return true
                     default: break
                     }
@@ -185,46 +189,20 @@ class NotchViewModel {
         switch status {
         case .opened:
             // Prevent closing if username picker is shown and no username set
-            if contentType == .usernamePicker {
+            if isUsernameRequired {
                 return
             }
 
             if geometry.isPointOutsidePanel(location, size: openedSize) {
+                // Just close; the click already reached whatever is underneath
+                // (the panel ignores mouse events outside its hit-test rect).
                 notchClose()
-                repostClickAt(location)
             } else if geometry.notchScreenRect.contains(location) {
                 notchClose()
             }
         case .closed, .popping:
             if geometry.isPointInNotch(location) {
                 notchOpen(reason: .click)
-            }
-        }
-    }
-
-    private func repostClickAt(_ location: CGPoint) {
-        Task {
-            try? await Task.sleep(for: .seconds(0.05))
-            guard let screen = NSScreen.main else { return }
-            let screenHeight = screen.frame.height
-            let cgPoint = CGPoint(x: location.x, y: screenHeight - location.y)
-
-            if let mouseDown = CGEvent(
-                mouseEventSource: nil,
-                mouseType: .leftMouseDown,
-                mouseCursorPosition: cgPoint,
-                mouseButton: .left
-            ) {
-                mouseDown.post(tap: .cghidEventTap)
-            }
-
-            if let mouseUp = CGEvent(
-                mouseEventSource: nil,
-                mouseType: .leftMouseUp,
-                mouseCursorPosition: cgPoint,
-                mouseButton: .left
-            ) {
-                mouseUp.post(tap: .cghidEventTap)
             }
         }
     }
@@ -239,6 +217,13 @@ class NotchViewModel {
     // MARK: - State Transitions
 
     func notchOpen(reason: NotchOpenReason) {
+        // Opening supersedes any pending boot-pop / quick-pop auto-dismiss
+        popDismissTask?.cancel()
+        popDismissTask = nil
+        quickPopTask?.cancel()
+        quickPopTask = nil
+        quickPopNotification = nil
+
         openReason = reason
         withAnimation(openAnimation) {
             status = .opened
@@ -246,6 +231,7 @@ class NotchViewModel {
     }
 
     func notchClose() {
+        guard !isUsernameRequired else { return }
         withAnimation(closeAnimation) {
             status = .closed
         }
@@ -259,8 +245,8 @@ class NotchViewModel {
         popDismissTask?.cancel()
         popDismissTask = Task {
             try? await Task.sleep(for: .seconds(bootDuration))
-            guard !Task.isCancelled else { return }
-            notchClose()
+            guard !Task.isCancelled, self.status == .popping else { return }
+            self.notchClose()
         }
     }
 
@@ -280,9 +266,9 @@ class NotchViewModel {
         quickPopTask?.cancel()
         quickPopTask = Task {
             try? await Task.sleep(for: .seconds(3))
-            guard !Task.isCancelled else { return }
-            quickPopNotification = nil
-            notchClose()
+            guard !Task.isCancelled, self.status == .popping else { return }
+            self.quickPopNotification = nil
+            self.notchClose()
         }
     }
 
@@ -307,9 +293,14 @@ class NotchViewModel {
     }
 
     func onUsernameSetupComplete() {
+        usernameJustClaimed = true
         contentType = .lobby
         if status == .opened {
             notchClose()
+        }
+        // Pull the claimed username into AuthManager.currentUser
+        Task {
+            await AuthManager.shared.refreshCurrentUser()
         }
     }
 
@@ -327,10 +318,38 @@ class NotchViewModel {
         isExpanded ? "▲ Less" : "▼ More"
     }
 
+    /// Set once the in-notch picker succeeds, until AuthManager's currentUser catches up.
+    @ObservationIgnored
+    private var usernameJustClaimed = false
+
     private func needsUsernameSetup() -> Bool {
-        guard let user = AuthManager.shared.currentUser else {
+        guard AuthManager.shared.currentUser != nil, !usernameJustClaimed else {
             return false
         }
-        return user.username.isEmpty
+        return !AuthManager.shared.hasUsername
+    }
+
+    /// True while the username picker is showing and the user still has no username.
+    /// Esc / Cmd+W / close buttons / outside clicks must not dismiss it.
+    var isUsernameRequired: Bool {
+        contentType == .usernamePicker && needsUsernameSetup()
+    }
+
+    /// Returns the notch to its idle state (used after sign-out / account deletion).
+    func resetForSignedOut() {
+        hoverTask?.cancel()
+        hoverTask = nil
+        popDismissTask?.cancel()
+        popDismissTask = nil
+        quickPopTask?.cancel()
+        quickPopTask = nil
+        quickPopNotification = nil
+        pendingAddFriendUsername = nil
+        usernameJustClaimed = false
+        isExpanded = false
+        contentType = .lobby
+        withAnimation(closeAnimation) {
+            status = .closed
+        }
     }
 }

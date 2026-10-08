@@ -1,4 +1,5 @@
 import SwiftUI
+import ServiceManagement
 
 struct SettingsView: View {
     @Bindable private var authManager = AuthManager.shared
@@ -6,6 +7,17 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var showingHiddenApps = false
     @State private var showingStatusPicker = false
+    @State private var showingBlockedUsers = false
+
+    // Launch at login mirrors SMAppService.mainApp.status (source of truth)
+    @State private var launchAtLoginEnabled = LaunchAtLogin.isEnabled
+    @State private var launchAtLoginMessage: String?
+
+    // Account actions
+    @State private var showSignOutConfirmation = false
+    @State private var showDeleteConfirmation = false
+    @State private var isDeletingAccount = false
+    @State private var accountError: AppError?
 
     var body: some View {
         ScrollView {
@@ -84,17 +96,9 @@ struct SettingsView: View {
                             .font(.subheadline.weight(.semibold))
                             .foregroundColor(.secondary)
 
-                        Toggle("Invisible Mode", isOn: $appSettings.isInvisible)
+                        Toggle("Hide your activity from friends", isOn: $appSettings.isInvisible)
                             .font(.body)
-                            .help("Hide your activity from all friends")
-
-                        Toggle("Share Window Titles", isOn: $appSettings.shareWindowTitle)
-                            .font(.body)
-                            .help("Show window titles to friends")
-
-                        Toggle("Share Browser URLs", isOn: $appSettings.shareBrowserURL)
-                            .font(.body)
-                            .help("Show browser URLs to friends")
+                            .help("Invisible mode: friends see you as offline and nothing is shared")
 
                         // Hidden apps section
                         Button(action: { showingHiddenApps = true }) {
@@ -186,48 +190,49 @@ struct SettingsView: View {
                             .font(.subheadline.weight(.semibold))
                             .foregroundColor(.secondary)
 
-                        Toggle("Launch at Login", isOn: $appSettings.launchAtLogin)
+                        Toggle("Launch at Login", isOn: Binding(
+                            get: { launchAtLoginEnabled },
+                            set: { setLaunchAtLogin($0) }
+                        ))
                             .font(.body)
                             .help("Start Clocked-In at login")
+
+                        if let message = launchAtLoginMessage {
+                            HStack(spacing: 6) {
+                                Text(message)
+                                    .font(.caption2)
+                                    .foregroundColor(.orange)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                if SMAppService.mainApp.status == .requiresApproval {
+                                    Button("Open Login Items") {
+                                        SMAppService.openSystemSettingsLoginItems()
+                                    }
+                                    .controlSize(.small)
+                                }
+                            }
+                        }
+                    }
+                    .onAppear {
+                        launchAtLoginEnabled = LaunchAtLogin.isEnabled
                     }
 
                     Divider()
 
-                    // Link Account section
+                    // About section
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("Link Account")
+                        Text("About")
                             .font(.subheadline.weight(.semibold))
                             .foregroundColor(.secondary)
 
-                        Text("Link a sign-in provider to secure your account")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-
-                        Button(action: signInWithGoogle) {
-                            HStack {
-                                Image(systemName: "g.circle.fill")
-                                    .font(.title3)
-                                Text("Link Google Account")
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 8)
-                            .background(Color.gray.opacity(0.1))
-                            .cornerRadius(6)
+                        Link(destination: AppLinks.privacyPolicy) {
+                            Label("Privacy Policy", systemImage: "hand.raised")
+                                .frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        .buttonStyle(.plain)
 
-                        Button(action: signInWithApple) {
-                            HStack {
-                                Image(systemName: "apple.logo")
-                                    .font(.title3)
-                                Text("Link Apple Account")
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 8)
-                            .background(Color.gray.opacity(0.1))
-                            .cornerRadius(6)
+                        Link(destination: AppLinks.support) {
+                            Label("Support", systemImage: "questionmark.circle")
+                                .frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        .buttonStyle(.plain)
                     }
 
                     Divider()
@@ -238,12 +243,63 @@ struct SettingsView: View {
                             .font(.subheadline.weight(.semibold))
                             .foregroundColor(.secondary)
 
-                        Button(action: signOut) {
+                        Button(action: { showingBlockedUsers = true }) {
+                            HStack {
+                                Text("Blocked Users")
+                                    .font(.body.weight(.medium))
+                                    .foregroundColor(.primary)
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.caption.weight(.medium))
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .sheet(isPresented: $showingBlockedUsers) {
+                            BlockedUsersView()
+                        }
+
+                        if let error = accountError {
+                            ErrorBanner(
+                                error: error,
+                                onDismiss: { accountError = nil },
+                                isCompact: true
+                            )
+                        }
+
+                        Button(action: { showSignOutConfirmation = true }) {
                             Text("Sign Out")
                                 .foregroundColor(.red)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
                         .buttonStyle(.plain)
+                        .disabled(isDeletingAccount)
+                        .confirmationDialog("Sign out of Clocked-In?", isPresented: $showSignOutConfirmation) {
+                            Button("Sign Out", role: .destructive) { signOut() }
+                            Button("Cancel", role: .cancel) {}
+                        } message: {
+                            Text("You'll stop sharing your activity until you sign back in. Your account stays tied to this Mac.")
+                        }
+
+                        Button(action: { showDeleteConfirmation = true }) {
+                            HStack(spacing: 6) {
+                                if isDeletingAccount {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                }
+                                Text(isDeletingAccount ? "Deleting Account…" : "Delete Account…")
+                                    .foregroundColor(.red)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(isDeletingAccount)
+                        .confirmationDialog("Delete your account?", isPresented: $showDeleteConfirmation) {
+                            Button("Delete Account", role: .destructive) { deleteAccount() }
+                            Button("Cancel", role: .cancel) {}
+                        } message: {
+                            Text("This permanently deletes your account, username, friends and friend requests from Clocked-In's servers. This can't be undone.")
+                        }
                     }
 
                     Divider()
@@ -259,24 +315,41 @@ struct SettingsView: View {
         }
     }
 
-    private func signInWithGoogle() {
-        AuthManager.shared.signInWithGoogle()
-    }
-
-    private func signInWithApple() {
-        Task {
-            do {
-                try await AuthManager.shared.signInWithApple()
-            } catch {
-                // Silently handle - user cancelled or error
-            }
+    private func setLaunchAtLogin(_ enabled: Bool) {
+        launchAtLoginMessage = nil
+        do {
+            try LaunchAtLogin.setEnabled(enabled)
+        } catch {
+            launchAtLoginMessage = error.localizedDescription
+        }
+        // Always re-read the real status so the toggle reverts on failure
+        launchAtLoginEnabled = LaunchAtLogin.isEnabled
+        appSettings.launchAtLogin = launchAtLoginEnabled
+        if enabled && SMAppService.mainApp.status == .requiresApproval {
+            launchAtLoginMessage = "Approve Clocked-In in System Settings › General › Login Items."
         }
     }
 
     private func signOut() {
+        authManager.signOut()
+        dismiss()
+    }
+
+    private func deleteAccount() {
+        guard !isDeletingAccount else { return }
+        isDeletingAccount = true
+        accountError = nil
+
         Task {
-            authManager.signOut()
-            dismiss()
+            do {
+                try await authManager.deleteAccount()
+                isDeletingAccount = false
+                dismiss()
+            } catch let err {
+                isDeletingAccount = false
+                accountError = AppError.from(err)
+                ErrorHandler.shared.handle(err, context: "deleteAccount", showToUser: false)
+            }
         }
     }
 }

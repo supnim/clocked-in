@@ -31,6 +31,9 @@ class NotchWindowController: NSWindowController {
     private let viewModel: NotchViewModel
     private var statusObservationTask: Task<Void, Never>?
 
+    /// Observer for display configuration changes (connect/disconnect, resolution, arrangement).
+    nonisolated(unsafe) private var screenObserver: NSObjectProtocol?
+
     /// Window height derived from screen geometry
     private var windowHeight: CGFloat {
         viewModel.geometry.screenRect.height
@@ -79,7 +82,7 @@ class NotchWindowController: NSWindowController {
                 openedSize: vm.openedSize,
                 deviceNotchRect: vm.geometry.deviceNotchRect,
                 screenWidth: vm.geometry.screenRect.width,
-                windowHeight: height
+                windowHeight: vm.geometry.windowHeight
             )
         }
         panel.contentView = hostingView
@@ -88,6 +91,9 @@ class NotchWindowController: NSWindowController {
 
         // Observe status changes for dynamic mouse event handling
         setupStatusObserver()
+
+        // Re-home the notch when displays change
+        setupScreenObserver()
 
         // Boot animation after slight delay
         Task {
@@ -125,6 +131,48 @@ class NotchWindowController: NSWindowController {
                 }
             }
         }
+    }
+
+    deinit {
+        if let screenObserver {
+            NotificationCenter.default.removeObserver(screenObserver)
+        }
+    }
+
+    // MARK: - Screen Changes
+
+    private func setupScreenObserver() {
+        screenObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.handleScreenParametersChanged()
+            }
+        }
+    }
+
+    /// Picks the notched screen (or main), rebuilds geometry and resizes the panel to cover it.
+    private func handleScreenParametersChanged() {
+        guard let screen = NotchGeometry.preferredScreen(), let panel = window else { return }
+
+        let newGeometry = NotchGeometry.create(for: screen)
+        let current = viewModel.geometry
+        guard newGeometry.screenRect != current.screenRect
+            || newGeometry.deviceNotchRect != current.deviceNotchRect
+            || newGeometry.style != current.style else { return }
+
+        if viewModel.status == .opened && !viewModel.isUsernameRequired {
+            viewModel.notchClose()
+        }
+        viewModel.geometry = newGeometry
+        panel.setFrame(newGeometry.screenRect, display: true)
+    }
+
+    /// Closes the notch and returns it to the lobby (after sign-out / account deletion).
+    func resetForSignedOut() {
+        viewModel.resetForSignedOut()
     }
 
     required init?(coder: NSCoder) {

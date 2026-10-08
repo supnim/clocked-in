@@ -26,7 +26,7 @@ states, nudges, and a fully honest privacy model (see below).
 
 - **Client**: Swift 6, SwiftUI + AppKit (for notch/system integration), macOS 15+
 - **Backend**: FastAPI, PostgreSQL, Redis, WebSockets for real-time presence
-- **Auth**: device-based on first run, with optional Apple or Google account linking
+- **Auth**: device-based on first run (no sign-up form, no passwords)
 
 ## Local Development
 
@@ -47,18 +47,31 @@ target `localhost:8000`; Release builds target the hosted backend.
 
 ## Distribution
 
-Clocked In is distributed as a direct-download notarized DMG — it is **not**
-on the Mac App Store. Until a signed release is published, build from source
-as described above.
+Clocked In ships on the **Mac App Store**.
+
+To produce a store build:
+
+```bash
+scripts/release.sh appstore                     # archive + export a .pkg to ./dist/appstore
+APPSTORE_UPLOAD=1 scripts/release.sh appstore   # archive + upload straight to App Store Connect
+```
+
+This archives the Release configuration with automatic signing (team
+`67QQB49ZUJ`) and exports with `ExportOptions-AppStore.plist`
+(`app-store-connect`). Without `APPSTORE_UPLOAD=1`, upload the exported
+package via Xcode's Organizer, Transporter, or `xcrun altool --upload-app`.
+
+A Developer ID–signed, notarized DMG can still be built for direct
+distribution with `scripts/release.sh dmg`.
 
 ## Privacy
 
 Clocked In shares real activity data with real people, so here's exactly what
 that means:
 
-- **What's shared**: the app you're currently using (name + icon). Window
-  title and browser domain sharing are on by default and each separately
-  toggleable in Settings.
+- **What's shared**: the app you're currently using (name + icon) and your
+  online / away status. Window titles and browser URLs are never collected
+  or shared.
 - **Who it's shared with**: only friends who have mutually accepted your
   friend request, via your own backend instance — never a third party.
 - **Hidden apps**: any app you add to your hidden list is filtered out
@@ -69,10 +82,12 @@ that means:
 - **Data lifetime**: presence data lives in Redis with a 45-second TTL. There
   is no long-term activity history stored server-side.
 - **No analytics or tracking.**
+- **Your controls**: block or report any user, and delete your account (and
+  all its server-side data) at any time from Settings.
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+Released under the MIT License.
 
 ## Author
 

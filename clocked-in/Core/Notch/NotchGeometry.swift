@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import AppKit
 
 struct NotchGeometry {
     let deviceNotchRect: CGRect
@@ -76,6 +77,15 @@ struct NotchGeometry {
                 height: deviceNotchRect.height + 10
             )
         }
+    }
+
+    /// The screen the notch UI should live on: the built-in display with a camera
+    /// housing (safeAreaInsets.top > 0) if one is connected, otherwise the main screen.
+    static func preferredScreen() -> NSScreen? {
+        if let notched = NSScreen.screens.first(where: { $0.safeAreaInsets.top > 0 }) {
+            return notched
+        }
+        return NSScreen.main ?? NSScreen.screens.first
     }
 
     static func create(for screen: NSScreen) -> NotchGeometry {

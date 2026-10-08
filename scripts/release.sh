@@ -1,20 +1,98 @@
 #!/usr/bin/env bash
-# Build, sign, notarize, and package Clocked In as a distributable DMG.
+# Build and package Clocked In for distribution.
 #
-# Prereqs:
-#   - "Developer ID Application" certificate + private key in the login keychain
-#   - APP_STORE_API_KEY / APP_STORE_API_ISSUER env vars set, with the AuthKey .p8
-#     at ~/.appstoreconnect/private_keys/AuthKey_$APP_STORE_API_KEY.p8
+# Modes:
+#   appstore  Archive (Release, automatic signing) and export for the Mac App Store
+#             using ExportOptions-AppStore.plist. Set APPSTORE_UPLOAD=1 to upload
+#             straight to App Store Connect instead of writing a .pkg.
+#             Prereqs: Xcode signed in to the team (67QQB49ZUJ) with an
+#             "Apple Distribution" / "Mac Installer Distribution" capable account.
+#   dmg       Developer ID-signed, notarized DMG for direct download.
+#             Prereqs: "Developer ID Application" certificate + private key in the
+#             login keychain; APP_STORE_API_KEY / APP_STORE_API_ISSUER env vars set,
+#             with the AuthKey .p8 at ~/.appstoreconnect/private_keys/AuthKey_$APP_STORE_API_KEY.p8
 #
-# Usage: scripts/release.sh [output-dir]   (default: ./dist)
+# Usage: scripts/release.sh [appstore|dmg] [output-dir]   (default mode: dmg, dir: ./dist)
 
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+MODE="dmg"
+case "${1:-}" in
+  appstore|dmg) MODE="$1"; shift ;;
+  -h|--help)
+    sed -n '2,18p' "$0"; exit 0 ;;
+esac
+
 OUT_DIR="${1:-$PROJECT_DIR/dist}"
 BUILD_DIR="$OUT_DIR/build"
 APP_NAME="clocked-in"
+
+# ---------------------------------------------------------------------------
+# Mac App Store
+# ---------------------------------------------------------------------------
+if [ "$MODE" = "appstore" ]; then
+  EXPORT_OPTIONS="$PROJECT_DIR/ExportOptions-AppStore.plist"
+  ARCHIVE_PATH="$BUILD_DIR/$APP_NAME-appstore.xcarchive"
+  EXPORT_DIR="$OUT_DIR/appstore"
+  [ -f "$EXPORT_OPTIONS" ] || { echo "Missing $EXPORT_OPTIONS" >&2; exit 1; }
+
+  mkdir -p "$OUT_DIR" "$BUILD_DIR"
+  rm -rf "$ARCHIVE_PATH" "$EXPORT_DIR"
+
+  echo "==> Archiving (Release, automatic signing, team 67QQB49ZUJ)"
+  xcodebuild -project "$PROJECT_DIR/clocked-in.xcodeproj" \
+    -scheme "$APP_NAME" \
+    -configuration Release \
+    -destination "generic/platform=macOS" \
+    -archivePath "$ARCHIVE_PATH" \
+    -allowProvisioningUpdates \
+    archive \
+    CODE_SIGN_STYLE=Automatic \
+    DEVELOPMENT_TEAM=67QQB49ZUJ \
+    -quiet
+
+  OPTIONS_FILE="$EXPORT_OPTIONS"
+  if [ "${APPSTORE_UPLOAD:-0}" = "1" ]; then
+    OPTIONS_FILE="$BUILD_DIR/ExportOptions-upload.plist"
+    cp "$EXPORT_OPTIONS" "$OPTIONS_FILE"
+    /usr/libexec/PlistBuddy -c "Set :destination upload" "$OPTIONS_FILE"
+    echo "==> Exporting and uploading to App Store Connect"
+  else
+    echo "==> Exporting App Store package"
+  fi
+
+  xcodebuild -exportArchive \
+    -archivePath "$ARCHIVE_PATH" \
+    -exportPath "$EXPORT_DIR" \
+    -exportOptionsPlist "$OPTIONS_FILE" \
+    -allowProvisioningUpdates
+
+  if [ "${APPSTORE_UPLOAD:-0}" = "1" ]; then
+    echo "Done: uploaded. The build appears in App Store Connect > TestFlight after processing."
+  else
+    PKG_PATH="$(ls "$EXPORT_DIR"/*.pkg 2>/dev/null | head -n 1 || true)"
+    echo "Done: ${PKG_PATH:-$EXPORT_DIR}"
+    cat <<EOT
+
+Upload the build to App Store Connect with one of:
+  * Xcode > Window > Organizer > Archives > select "$ARCHIVE_PATH" > Distribute App
+  * Transporter.app: drag in ${PKG_PATH:-the .pkg in $EXPORT_DIR} and click Deliver
+  * xcrun altool --upload-app --type macos --file "${PKG_PATH:-$EXPORT_DIR/<app>.pkg}" \\
+        --apiKey "\$APP_STORE_API_KEY" --apiIssuer "\$APP_STORE_API_ISSUER"
+  * or re-run with APPSTORE_UPLOAD=1 scripts/release.sh appstore
+EOT
+  fi
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Developer ID DMG (direct download)
+# ---------------------------------------------------------------------------
 IDENTITY="Developer ID Application"
+: "${APP_STORE_API_KEY:?Set APP_STORE_API_KEY for notarization}"
+: "${APP_STORE_API_ISSUER:?Set APP_STORE_API_ISSUER for notarization}"
 KEY_FILE="$HOME/.appstoreconnect/private_keys/AuthKey_${APP_STORE_API_KEY}.p8"
 
 mkdir -p "$OUT_DIR" "$BUILD_DIR"

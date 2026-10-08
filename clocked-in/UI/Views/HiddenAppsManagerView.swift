@@ -37,6 +37,8 @@ struct HiddenAppsManagerView: View {
                 }
                 .buttonStyle(.plain)
                 .help(showingAddSection ? "Close add section" : "Add hidden app")
+
+                Button("Done") { dismiss() }
             }
 
             // Description
@@ -61,7 +63,7 @@ struct HiddenAppsManagerView: View {
 
             Spacer()
         }
-        .padding(.horizontal, 4)
+        .padding()
         .task {
             loadRecentApps()
         }

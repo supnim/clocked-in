@@ -20,8 +20,11 @@ struct ExpandedNotchView: View {
                     .padding(8)
 
             case .addFriend:
-                AddFriendView()
-                    .padding(8)
+                AddFriendView(
+                    prefilledUsername: viewModel.pendingAddFriendUsername,
+                    onPrefillConsumed: { viewModel.pendingAddFriendUsername = nil }
+                )
+                .padding(8)
 
             case .pendingRequests:
                 PendingRequestsView()
@@ -29,8 +32,11 @@ struct ExpandedNotchView: View {
 
             case .friendDetail(let friendUid):
                 if let friendPresence = PresenceListener.shared.friendsPresence.first(where: { $0.uid == friendUid }) {
-                    FriendDetailView(friendPresence: friendPresence)
-                        .padding(8)
+                    FriendDetailView(
+                        friendPresence: friendPresence,
+                        onClose: { viewModel.showContent(.lobby) }
+                    )
+                    .padding(8)
                 } else {
                     VStack(spacing: 12) {
                         Text("Friend not found")

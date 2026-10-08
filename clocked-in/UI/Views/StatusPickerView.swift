@@ -47,7 +47,7 @@ struct StatusPickerView: View {
             ScrollView {
                 VStack(spacing: 12) {
                     // Clear status option (if status exists)
-                    if currentStatus != nil {
+                    if let currentStatus, !currentStatus.isEmpty {
                         Button(action: clearStatus) {
                             HStack(spacing: 12) {
                                 Image(systemName: "xmark.circle")
@@ -189,7 +189,8 @@ struct StatusPickerView: View {
 
         Task {
             do {
-                try await updateStatusOnServer(nil)
+                // Server treats "" as "clear" (stored as NULL)
+                try await updateStatusOnServer("")
                 authManager.currentUser?.statusMessage = nil
                 isUpdating = false
                 dismiss()
@@ -200,9 +201,9 @@ struct StatusPickerView: View {
         }
     }
 
-    private func updateStatusOnServer(_ status: String?) async throws {
+    private func updateStatusOnServer(_ status: String) async throws {
         struct StatusUpdate: Encodable {
-            let statusMessage: String?
+            let statusMessage: String
 
             enum CodingKeys: String, CodingKey {
                 case statusMessage = "status_message"

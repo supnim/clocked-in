@@ -13,6 +13,9 @@ struct AppGroup: Identifiable {
 struct LobbyView: View {
     let viewModel: NotchViewModel
 
+    @State private var friendToRemove: FriendPresence?
+    @State private var actionError: AppError?
+
     /// Whether we're currently offline/reconnecting
     private var isOffline: Bool {
         NetworkMonitor.shared.connectionState.isOffline
@@ -60,6 +63,113 @@ struct LobbyView: View {
         return userActivity.bundleId == bundleId
     }
 
+    // MARK: - Row Actions
+
+    private func nudge(_ presence: FriendPresence) {
+        guard WebSocketClient.shared.isConnected else {
+            actionError = .network(message: "Not connected to server")
+            return
+        }
+        Task {
+            await WebSocketClient.shared.sendNudge(to: presence.uid)
+        }
+    }
+
+    private func remove(_ presence: FriendPresence) {
+        let friendId = presence.uid
+        Task {
+            do {
+                try await FriendService.shared.removeFriend(friendId)
+                FriendService.shared.forgetFriendLocally(friendId)
+            } catch let err {
+                actionError = AppError.from(err)
+                ErrorHandler.shared.handle(err, context: "removeFriend", showToUser: false)
+            }
+        }
+    }
+
+    // MARK: - Empty-list States
+
+    /// No friends to show yet: distinguish "no network", "still connecting" and "really no friends".
+    @ViewBuilder
+    private var emptyListContent: some View {
+        let ws = WebSocketClient.shared
+        if NetworkMonitor.shared.isOffline {
+            statusMessage(
+                icon: "wifi.slash",
+                title: "You're offline",
+                detail: "Friends will appear when your connection is back.",
+                showRetry: false
+            )
+        } else if !ws.isConnected {
+            // initial_presence always follows a successful connect, so until we're
+            // connected we can't tell whether the list is really empty.
+            if ws.isReconnecting {
+                statusMessage(
+                    icon: "arrow.triangle.2.circlepath",
+                    title: "Reconnecting…",
+                    detail: nil,
+                    showRetry: false,
+                    showSpinner: true
+                )
+            } else {
+                statusMessage(
+                    icon: "antenna.radiowaves.left.and.right",
+                    title: "Connecting…",
+                    detail: "If this takes a while, the server may be unreachable.",
+                    showRetry: true,
+                    showSpinner: true
+                )
+            }
+        } else if ws.latestInitialPresence == nil {
+            // Connected, waiting for the server's initial friend list
+            statusMessage(
+                icon: "person.2",
+                title: "Loading friends…",
+                detail: nil,
+                showRetry: false,
+                showSpinner: true
+            )
+        } else {
+            EmptyStateView(viewModel: viewModel)
+        }
+    }
+
+    private func statusMessage(
+        icon: String,
+        title: String,
+        detail: String?,
+        showRetry: Bool,
+        showSpinner: Bool = false
+    ) -> some View {
+        VStack(spacing: 10) {
+            if showSpinner {
+                ProgressView()
+                    .controlSize(.small)
+            } else {
+                Image(systemName: icon)
+                    .font(.title2)
+                    .foregroundColor(.secondary)
+            }
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+            if let detail {
+                Text(detail)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            if showRetry {
+                Button("Retry") {
+                    NetworkMonitor.shared.retryConnection()
+                }
+                .controlSize(.small)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding()
+    }
+
     var body: some View {
         // Access singletons directly in body for proper @Observable tracking
         let presenceListener = PresenceListener.shared
@@ -68,10 +178,20 @@ struct LobbyView: View {
 
         Group {
             if presenceListener.friendsPresence.isEmpty {
-                EmptyStateView(viewModel: viewModel)
+                emptyListContent
             } else {
                 ScrollView {
                     LazyVStack(spacing: 0) {
+                        if let error = actionError {
+                            ErrorBanner(
+                                error: error,
+                                onDismiss: { actionError = nil },
+                                isCompact: true
+                            )
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                        }
+
                         // Offline banner at top when disconnected
                         if isOffline {
                             OfflineBanner(isCompact: false)
@@ -105,6 +225,8 @@ struct LobbyView: View {
                                     FriendRow(
                                         presence: presence,
                                         onTap: { showFriendDetail(presence) },
+                                        onNudge: { nudge(presence) },
+                                        onRemove: { friendToRemove = presence },
                                         currentUserActivity: currentUserActivity
                                     )
                                     .focusable()
@@ -117,9 +239,11 @@ struct LobbyView: View {
                             offlineSectionHeader
 
                             ForEach(presenceListener.offlineFriends) { presence in
-                                FriendRow(presence: presence) {
-                                    showFriendDetail(presence)
-                                }
+                                FriendRow(
+                                    presence: presence,
+                                    onTap: { showFriendDetail(presence) },
+                                    onRemove: { friendToRemove = presence }
+                                )
                                 .focusable()
                             }
                         }
@@ -127,7 +251,23 @@ struct LobbyView: View {
                 }
             }
         }
-        // Note: PresenceListener lifecycle is managed by CompactNotchView
+        .confirmationDialog(
+            "Remove \(friendToRemove?.user.name ?? "friend")?",
+            isPresented: Binding(
+                get: { friendToRemove != nil },
+                set: { if !$0 { friendToRemove = nil } }
+            ),
+            presenting: friendToRemove
+        ) { presence in
+            Button("Remove", role: .destructive) {
+                friendToRemove = nil
+                remove(presence)
+            }
+            Button("Cancel", role: .cancel) { friendToRemove = nil }
+        } message: { _ in
+            Text("You will no longer see each other's activity.")
+        }
+        // Note: PresenceListener lifecycle is owned by AppDelegate
     }
 
     // MARK: - Section Headers

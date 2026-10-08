@@ -31,6 +31,19 @@ class IdentityService {
         }
     }
 
+    /// Deletes the stored device identity. The next device sign-in creates a brand-new account.
+    func resetIdentity() {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keychainService,
+            kSecAttrAccount as String: keychainKey
+        ]
+        let status = SecItemDelete(query as CFDictionary)
+        if status != errSecSuccess && status != errSecItemNotFound {
+            log.warning("Failed to delete device identity from Keychain: \(status)")
+        }
+    }
+
     private func getUUIDFromKeychain() -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,

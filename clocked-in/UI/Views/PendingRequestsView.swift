@@ -6,7 +6,7 @@ struct PendingRequestsView: View {
     @State private var error: AppError?
     @State private var actionError: AppError?
     @State private var processingRequestId: String?
-    @Environment(\.dismiss) private var dismiss
+    @State private var requestToBlock: FriendRequest?
 
     var body: some View {
         VStack(spacing: 12) {
@@ -88,6 +88,18 @@ struct PendingRequestsView: View {
                             }
                             .disabled(processingRequestId == request.id)
                             .accessibilityLabel("Decline request from \(request.fromName)")
+
+                            Button(action: { requestToBlock = request }) {
+                                Image(systemName: "hand.raised.fill")
+                                    .padding(.vertical, 8)
+                                    .padding(.horizontal, 10)
+                                    .background(Color.red.opacity(0.15))
+                                    .foregroundColor(.red)
+                                    .cornerRadius(6)
+                            }
+                            .disabled(processingRequestId == request.id)
+                            .help("Block @\(request.senderUsername)")
+                            .accessibilityLabel("Block \(request.fromName)")
                         }
                     }
                     .padding(.vertical, 8)
@@ -97,6 +109,19 @@ struct PendingRequestsView: View {
         }
         .task {
             await loadRequests()
+        }
+        .confirmationDialog(
+            "Block @\(requestToBlock?.senderUsername ?? "user")?",
+            isPresented: Binding(
+                get: { requestToBlock != nil },
+                set: { if !$0 { requestToBlock = nil } }
+            ),
+            presenting: requestToBlock
+        ) { request in
+            Button("Block", role: .destructive) { blockSender(of: request) }
+            Button("Cancel", role: .cancel) { requestToBlock = nil }
+        } message: { _ in
+            Text("Their request will be removed and they won't be able to find you, send requests or nudge you. You can unblock them in Settings.")
         }
     }
 
@@ -125,6 +150,27 @@ struct PendingRequestsView: View {
             } catch let err {
                 actionError = AppError.from(err)
                 ErrorHandler.shared.handle(err, context: "acceptFriendRequest", showToUser: false)
+            }
+
+            processingRequestId = nil
+        }
+    }
+
+    private func blockSender(of request: FriendRequest) {
+        requestToBlock = nil
+        Task {
+            actionError = nil
+            processingRequestId = request.id
+
+            do {
+                try await FriendService.shared.blockUser(request.senderId)
+                pendingRequests.removeAll { $0.senderId == request.senderId }
+                FriendService.shared.forgetFriendLocally(request.senderId)
+                // Refresh from the server so the list reflects both-direction cleanup
+                await loadRequests()
+            } catch let err {
+                actionError = AppError.from(err)
+                ErrorHandler.shared.handle(err, context: "blockUser", showToUser: false)
             }
 
             processingRequestId = nil

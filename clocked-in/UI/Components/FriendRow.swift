@@ -133,10 +133,16 @@ struct FriendRow: View {
             }
             .accessibilityLabel("\(presence.user.name), \(presence.status.accessibilityDescription)")
             .contextMenu {
-                Button("View Profile") { onTap?() }
-                Button("Nudge") { onNudge?() }
-                Divider()
-                Button("Remove Friend", role: .destructive) { onRemove?() }
+                if let onTap {
+                    Button("View Profile") { onTap() }
+                }
+                if let onNudge {
+                    Button("Nudge") { onNudge() }
+                }
+                if let onRemove {
+                    Divider()
+                    Button("Remove Friend…", role: .destructive) { onRemove() }
+                }
             }
         }
     }

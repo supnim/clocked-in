@@ -2,9 +2,14 @@ import SwiftUI
 import AuthenticationServices
 
 struct OnboardingView: View {
+    /// Called once the user is authenticated and has a username.
+    var onFinished: () -> Void = {}
+
     @State private var authError: AppError?
     @State private var isRegistering = false
-    @State private var isRegistered = false
+    @State private var needsUsername = false
+    @State private var isFinishing = false
+    @State private var registrationFailed = false
 
     var body: some View {
         VStack(spacing: 24) {
@@ -27,11 +32,15 @@ struct OnboardingView: View {
 
             Spacer()
 
-            if isRegistering {
+            if isRegistering || isFinishing {
                 ProgressView("Setting up...")
-            } else if isRegistered {
-                // Show username picker after device registration
+            } else if needsUsername {
+                // Show username picker after device registration (new users only)
                 UsernamePickerView(onComplete: completeSetup)
+            } else if registrationFailed {
+                Button("Try Again") {
+                    Task { await registerDevice() }
+                }
             }
 
             // Error display
@@ -53,18 +62,40 @@ struct OnboardingView: View {
     }
 
     private func registerDevice() async {
+        guard !isRegistering else { return }
         isRegistering = true
+        authError = nil
+        registrationFailed = false
+        defer { isRegistering = false }
+
         do {
             try await AuthManager.shared.signInWithDevice()
-            isRegistered = true
+            if AuthManager.shared.needsUsername || !AuthManager.shared.hasUsername {
+                needsUsername = true
+            } else {
+                // Returning user who already has a username: skip the picker
+                onFinished()
+            }
         } catch {
             authError = AppError.from(error)
+            registrationFailed = true
         }
-        isRegistering = false
     }
 
     private func completeSetup() {
-        AppSettings.shared.hasCompletedOnboarding = true
+        isFinishing = true
+        Task {
+            // Pull the freshly claimed username into currentUser
+            await AuthManager.shared.refreshCurrentUser()
+            isFinishing = false
+            if AuthManager.shared.isAuthenticated {
+                onFinished()
+            } else {
+                needsUsername = false
+                registrationFailed = true
+                authError = .network(message: "Couldn't finish setup. Please try again.")
+            }
+        }
     }
 }
 

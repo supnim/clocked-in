@@ -85,11 +85,6 @@ struct CompactNotchView: View {
         .animation(.easeInOut(duration: 0.2), value: currentNotification != nil)
         .animation(.easeInOut(duration: 0.2), value: viewModel.quickPopNotification != nil)
         .animation(.easeInOut(duration: 0.3), value: showOfflineBanner)
-        .onAppear {
-            presenceListener.startListening()
-        }
-        .onDisappear {
-            presenceListener.stopListening()
-        }
+        // PresenceListener lifecycle is owned by AppDelegate (startServices/stopServices)
     }
 }

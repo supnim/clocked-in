@@ -99,4 +99,33 @@ final class FriendService {
     func declineRequest(_ requestId: String) async throws {
         let _: EmptyResponse = try await api.post("/api/friends/decline/\(requestId)")
     }
+
+    /// Drops a former friend (removed or blocked) from the live list and the offline cache
+    /// immediately, without waiting for the server's next presence push.
+    func forgetFriendLocally(_ userId: String) {
+        PresenceListener.shared.friendsPresence.removeAll { $0.uid == userId }
+        CachedFriendsService.shared.cacheFriendsList(PresenceListener.shared.friendsPresence)
+    }
+
+    // MARK: - Safety (block / report)
+
+    /// Blocks a user. Removes any friendship and pending requests in both directions.
+    func blockUser(_ userId: String) async throws {
+        try await api.blockUser(id: userId)
+    }
+
+    /// Unblocks a previously blocked user.
+    func unblockUser(_ userId: String) async throws {
+        try await api.unblockUser(id: userId)
+    }
+
+    /// Lists users the current user has blocked.
+    func getBlockedUsers() async throws -> [BlockedUser] {
+        try await api.listBlockedUsers()
+    }
+
+    /// Reports a user to the moderators. `reason` must be 1...500 characters.
+    func reportUser(_ userId: String, reason: String) async throws {
+        try await api.reportUser(id: userId, reason: reason)
+    }
 }

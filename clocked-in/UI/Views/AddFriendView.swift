@@ -1,6 +1,11 @@
 import SwiftUI
 
 struct AddFriendView: View {
+    /// Username to pre-fill (e.g. from a `clockedin://add/{username}` deep link).
+    var prefilledUsername: String? = nil
+    /// Called after the pre-fill has been applied so it isn't re-applied later.
+    var onPrefillConsumed: (() -> Void)? = nil
+
     @State private var searchQuery = ""
     @State private var searchResults: [PublicUser] = []
     @State private var isSearching = false
@@ -153,6 +158,15 @@ struct AddFriendView: View {
         .task {
             await loadInviteLink()
         }
+        .onAppear { applyPrefill() }
+        .onChange(of: prefilledUsername) { _, _ in applyPrefill() }
+    }
+
+    private func applyPrefill() {
+        guard let username = prefilledUsername, !username.isEmpty else { return }
+        // Setting the query triggers the debounced search via onChange(of: searchQuery)
+        searchQuery = username
+        onPrefillConsumed?()
     }
 
     private func searchUsers(query: String) {

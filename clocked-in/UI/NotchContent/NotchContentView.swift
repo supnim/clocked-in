@@ -126,7 +126,10 @@ struct NotchContentView: View {
 
                     Spacer()
 
-                    if viewModel.contentType != .lobby {
+                    if viewModel.isUsernameRequired {
+                        // No navigation or close while a username is required
+                        EmptyView()
+                    } else if viewModel.contentType != .lobby {
                         ActionButton(icon: "chevron.left") {
                             viewModel.showContent(.lobby)
                         }
@@ -144,8 +147,10 @@ struct NotchContentView: View {
                         }
                     }
 
-                    ActionButton(icon: "xmark") {
-                        viewModel.notchClose()
+                    if !viewModel.isUsernameRequired {
+                        ActionButton(icon: "xmark") {
+                            viewModel.notchClose()
+                        }
                     }
                 }
                 .padding(.horizontal, 8)
