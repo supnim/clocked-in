@@ -5,12 +5,14 @@ from typing import Annotated
 from uuid import UUID
 
 import asyncpg
+import asyncpg.exceptions
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
 from app.api.deps import get_current_user
+from app.api.ratelimit import rate_limit_user
+from app.api.safety import is_blocked, notify_friends_changed
 from app.database import get_db
-from app.redis_client import get_redis
 from app.ws.presence import presence_manager
 
 router = APIRouter(prefix="/api/friends", tags=["friends"])
@@ -25,6 +27,7 @@ class PresenceData(BaseModel):
     """Current presence data for a user."""
 
     online: bool = False
+    status: str = "offline"
     app_name: str | None = None
     app_bundle_id: str | None = None
     window_title: str | None = None
@@ -80,27 +83,20 @@ async def get_presence_from_redis(user_id: str) -> PresenceData:
     data = await presence_manager.get_presence(user_id)
 
     if data:
+        updated_at = data.get("updated_at")
         return PresenceData(
-            online=data.get("online", False),
+            online=data.get("online") is True,
+            status=data.get("status") or "offline",
             app_name=data.get("app_name"),
             app_bundle_id=data.get("bundle_id"),  # Match WebSocket field name
             window_title=data.get("window_title"),
             url=data.get("browser_domain"),  # Map browser_domain to url
-            updated_at=datetime.fromtimestamp(
-                int(data["updated_at"]) / 1000, tz=timezone.utc
-            )
-            if isinstance(data.get("updated_at"), str)
+            updated_at=datetime.fromtimestamp(updated_at / 1000, tz=timezone.utc)
+            if isinstance(updated_at, int) and not isinstance(updated_at, bool)
             else None,
         )
 
     return PresenceData(online=False)
-
-
-async def invalidate_friend_cache(redis, user_id: str) -> None:
-    """Invalidate the friend list cache for a user."""
-    # Use consistent key with presence.py
-    cache_key = f"friends:{user_id}"
-    await redis.delete(cache_key)
 
 
 # -----------------------------------------------------------------------------
@@ -163,10 +159,33 @@ async def get_friends(
     return friends
 
 
+async def _create_friendship(
+    db: asyncpg.Connection, a: str | UUID, b: str | UUID, request_id: UUID
+) -> None:
+    """Insert the friendship row and mark the request accepted (call in a txn)."""
+    now = datetime.now(timezone.utc)
+    await db.execute(
+        """
+        INSERT INTO friendships (user_id_1, user_id_2, created_at)
+        VALUES (LEAST($1::uuid, $2::uuid), GREATEST($1::uuid, $2::uuid), $3)
+        ON CONFLICT DO NOTHING
+        """,
+        str(a),
+        str(b),
+        now,
+    )
+    await db.execute(
+        "UPDATE friend_requests SET status = 'accepted', updated_at = $1 WHERE id = $2",
+        now,
+        request_id,
+    )
+
+
 @router.post(
     "/request/{username}",
     response_model=FriendRequestSentResponse,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(rate_limit_user("friend_request", 30, 3600))],
 )
 async def send_friend_request(
     username: str,
@@ -175,15 +194,14 @@ async def send_friend_request(
 ) -> FriendRequestSentResponse:
     """Send a friend request to a user by username.
 
-    Validates that:
-    - Target user exists
-    - Not sending request to self
-    - Not already friends
-    - No pending request exists
+    - 404 if the user doesn't exist, 400 for self / already friends
+    - 403 if either user has blocked the other
+    - 409 if a request from the caller to this user is already pending
+    - if the target already sent the caller a pending request, it is
+      accepted instead and the response has ``status: "accepted"``
     """
-    # Find target user by username
     target_user = await db.fetchrow(
-        "SELECT id, username FROM users WHERE username = $1", username
+        "SELECT id, username FROM users WHERE username = $1", username.lower()
     )
     if not target_user:
         raise HTTPException(
@@ -193,19 +211,26 @@ async def send_friend_request(
 
     target_id = str(target_user["id"])
 
-    # Validate not self
     if target_id == current_user:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Cannot send friend request to yourself",
         )
 
-    # Check if already friends (sorted user IDs)
-    user_ids = sorted([current_user, target_id])
-    existing_friendship = await db.fetchrow(
-        "SELECT 1 FROM friendships WHERE user_id_1 = $1 AND user_id_2 = $2",
-        user_ids[0],
-        user_ids[1],
+    if await is_blocked(db, current_user, target_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot send request",
+        )
+
+    existing_friendship = await db.fetchval(
+        """
+        SELECT 1 FROM friendships
+        WHERE user_id_1 = LEAST($1::uuid, $2::uuid)
+          AND user_id_2 = GREATEST($1::uuid, $2::uuid)
+        """,
+        current_user,
+        target_id,
     )
     if existing_friendship:
         raise HTTPException(
@@ -213,37 +238,47 @@ async def send_friend_request(
             detail="Already friends with this user",
         )
 
-    # Check-then-insert in a transaction to avoid race conditions
-    now = datetime.now(timezone.utc)
+    # Reverse request pending (target -> me)? Accept it instead of duplicating.
     async with db.transaction():
-        existing_request = await db.fetchrow(
+        reverse = await db.fetchrow(
             """
-            SELECT 1 FROM friend_requests
-            WHERE status = 'pending'
-            AND (
-                (sender_id = $1 AND recipient_id = $2)
-                OR (sender_id = $2 AND recipient_id = $1)
-            )
+            SELECT id FROM friend_requests
+            WHERE status = 'pending' AND sender_id = $1::uuid AND recipient_id = $2::uuid
+            FOR UPDATE
             """,
-            current_user,
             target_id,
+            current_user,
         )
-        if existing_request:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Friend request already pending",
-            )
+        if reverse:
+            await _create_friendship(db, current_user, target_id, reverse["id"])
+    if reverse:
+        await notify_friends_changed(current_user, target_id)
+        return FriendRequestSentResponse(
+            id=str(reverse["id"]),
+            recipient_id=target_id,
+            recipient_username=target_user["username"],
+            status="accepted",
+            created_at=datetime.now(timezone.utc),
+        )
 
+    # Insert; the unique partial index on pending (LEAST, GREATEST) pairs
+    # makes concurrent duplicates fail with UniqueViolationError -> 409.
+    try:
         request_row = await db.fetchrow(
             """
             INSERT INTO friend_requests (sender_id, recipient_id, status, created_at, updated_at)
-            VALUES ($1, $2, 'pending', $3, $3)
+            VALUES ($1::uuid, $2::uuid, 'pending', $3, $3)
             RETURNING id, created_at
             """,
             current_user,
             target_id,
-            now,
+            datetime.now(timezone.utc),
         )
+    except asyncpg.exceptions.UniqueViolationError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Friend request already pending",
+        ) from None
 
     return FriendRequestSentResponse(
         id=str(request_row["id"]),
@@ -307,68 +342,46 @@ async def accept_friend_request(
     the request status to 'accepted'. Invalidates Redis friend
     cache for both users.
     """
-    # Fetch the request and validate ownership
-    request_row = await db.fetchrow(
-        """
-        SELECT id, sender_id, recipient_id, status
-        FROM friend_requests
-        WHERE id = $1
-        """,
-        request_id,
-    )
-
-    if not request_row:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Friend request not found",
-        )
-
-    if str(request_row["recipient_id"]) != current_user:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to accept this request",
-        )
-
-    if request_row["status"] != "pending":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Request already {request_row['status']}",
-        )
-
-    sender_id = str(request_row["sender_id"])
-    now = datetime.now(timezone.utc)
-
-    # Create friendship with sorted user IDs
-    user_ids = sorted([current_user, sender_id])
-
     async with db.transaction():
-        # Create friendship record
-        await db.execute(
+        # Lock the row so two concurrent accepts can't both proceed.
+        request_row = await db.fetchrow(
             """
-            INSERT INTO friendships (user_id_1, user_id_2, created_at)
-            VALUES ($1, $2, $3)
-            ON CONFLICT DO NOTHING
+            SELECT id, sender_id, recipient_id, status
+            FROM friend_requests
+            WHERE id = $1
+            FOR UPDATE
             """,
-            user_ids[0],
-            user_ids[1],
-            now,
-        )
-
-        # Update request status
-        await db.execute(
-            """
-            UPDATE friend_requests
-            SET status = 'accepted', updated_at = $1
-            WHERE id = $2
-            """,
-            now,
             request_id,
         )
 
-    # Invalidate Redis friend cache for both users
-    redis = get_redis()
-    await invalidate_friend_cache(redis, current_user)
-    await invalidate_friend_cache(redis, sender_id)
+        if not request_row:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Friend request not found",
+            )
+
+        if str(request_row["recipient_id"]) != current_user:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to accept this request",
+            )
+
+        if request_row["status"] != "pending":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Request already {request_row['status']}",
+            )
+
+        sender_id = str(request_row["sender_id"])
+        if await is_blocked(db, current_user, sender_id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot accept this request",
+            )
+
+        await _create_friendship(db, current_user, sender_id, request_id)
+
+    await notify_friends_changed(current_user, sender_id)
 
     return MessageResponse(message="Friend request accepted")
 
@@ -427,37 +440,31 @@ async def decline_friend_request(
 
 @router.delete("/{user_id}", response_model=MessageResponse)
 async def remove_friend(
-    user_id: str,
+    user_id: UUID,
     current_user: Annotated[str, Depends(get_current_user)],
     db: Annotated[asyncpg.Connection, Depends(get_db)],
 ) -> MessageResponse:
     """Remove a friendship.
 
-    Deletes the friendship record and invalidates Redis friend
-    cache for both users.
+    Deletes the friendship record, invalidates both users' friend caches and
+    publishes ``friends_changed`` for both.
     """
-    # Use sorted user IDs to find the friendship
-    user_ids = sorted([current_user, user_id])
-
     result = await db.execute(
         """
         DELETE FROM friendships
-        WHERE user_id_1 = $1 AND user_id_2 = $2
+        WHERE user_id_1 = LEAST($1::uuid, $2::uuid)
+          AND user_id_2 = GREATEST($1::uuid, $2::uuid)
         """,
-        user_ids[0],
-        user_ids[1],
+        current_user,
+        user_id,
     )
 
-    # Check if any row was deleted
     if result == "DELETE 0":
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Friendship not found",
         )
 
-    # Invalidate Redis friend cache for both users
-    redis = get_redis()
-    await invalidate_friend_cache(redis, current_user)
-    await invalidate_friend_cache(redis, user_id)
+    await notify_friends_changed(current_user, user_id)
 
     return MessageResponse(message="Friend removed")

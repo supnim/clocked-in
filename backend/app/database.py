@@ -1,7 +1,7 @@
 """Database connection pool using asyncpg."""
 
 import json
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
 
 import asyncpg
 from asyncpg import Pool

@@ -6,8 +6,9 @@ cleanup between test runs.
 """
 
 import uuid
+import uuid as _uuid
 
-from conftest import requires_stack
+from conftest import make_friends, register_user, requires_stack
 
 pytestmark = requires_stack
 
@@ -72,3 +73,57 @@ async def test_friend_request_accept_and_list(client):
 
     assert bob["user_id"] in alice_friend_ids
     assert alice["user_id"] in bob_friend_ids
+
+
+async def test_reverse_request_auto_accepts(client):
+    alice = await register_user(client, "alice")
+    bob = await register_user(client, "bob")
+
+    first = await client.post(
+        f"/api/friends/request/{bob['username']}", headers=alice["headers"]
+    )
+    assert first.status_code == 201
+    assert first.json()["status"] == "pending"
+
+    # Duplicate in the same direction -> 409
+    dup = await client.post(
+        f"/api/friends/request/{bob['username']}", headers=alice["headers"]
+    )
+    assert dup.status_code == 409
+
+    # Bob requests Alice -> auto-accepted
+    reverse = await client.post(
+        f"/api/friends/request/{alice['username']}", headers=bob["headers"]
+    )
+    assert reverse.status_code == 201
+    assert reverse.json()["status"] == "accepted"
+    assert reverse.json()["id"] == first.json()["id"]
+
+    for me, other in ((alice, bob), (bob, alice)):
+        friends = await client.get("/api/friends", headers=me["headers"])
+        assert other["user_id"] in {f["user_id"] for f in friends.json()}
+    pending = await client.get("/api/friends/requests", headers=bob["headers"])
+    assert alice["user_id"] not in {r["sender_id"] for r in pending.json()}
+
+    again = await client.post(
+        f"/api/friends/request/{alice['username']}", headers=bob["headers"]
+    )
+    assert again.status_code == 400
+
+
+async def test_remove_friend_validation(client):
+    alice = await register_user(client, "alice")
+    bob = await register_user(client, "bob")
+    await make_friends(client, alice, bob)
+
+    assert (
+        await client.delete("/api/friends/not-a-uuid", headers=alice["headers"])
+    ).status_code == 422
+    assert (
+        await client.delete(f"/api/friends/{_uuid.uuid4()}", headers=alice["headers"])
+    ).status_code == 404
+    assert (
+        await client.delete(f"/api/friends/{bob['user_id']}", headers=alice["headers"])
+    ).status_code == 200
+    friends = await client.get("/api/friends", headers=bob["headers"])
+    assert alice["user_id"] not in {f["user_id"] for f in friends.json()}

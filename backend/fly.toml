@@ -1,0 +1,48 @@
+# Fly.io config for the Clocked-In API. See DEPLOY.md.
+# Change `app` to your Fly app name (must be globally unique).
+app = "clockedin-api"
+primary_region = "sjc"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[deploy]
+  # Apply DB migrations once per deploy, before new machines start.
+  release_command = "python scripts/migrate.py"
+
+[env]
+  DEBUG = "false"
+  PORT = "8000"
+  JWT_EXPIRATION_HOURS = "720"
+  # Fly's edge proxy appends the real client IP to X-Forwarded-For.
+  TRUST_PROXY = "true"
+  PROXY_HOPS = "1"
+  FORWARDED_ALLOW_IPS = "*"
+  # Migrations run in release_command above.
+  MIGRATE_ON_START = "false"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  # Presence relies on long-lived WebSockets and in-memory nudge routing:
+  # keep exactly one machine always running (do not scale out until nudges
+  # move to Redis pub/sub).
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "connections"
+    soft_limit = 2000
+    hard_limit = 4000
+
+  [[http_service.checks]]
+    method = "GET"
+    path = "/health/ready"
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "20s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

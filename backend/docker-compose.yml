@@ -12,11 +12,13 @@ services:
       # refuse to start against a volume mounted at the legacy .../data path —
       # mount the parent dir instead (see docker-library/postgres#1259).
       - postgres_data:/var/lib/postgresql
-      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      # Schema is created/upgraded by scripts/migrate.py when the api starts
+      # (MIGRATE_ON_START=true). Existing volumes created from init.sql are
+      # adopted automatically.
     ports:
-      # Host port 55432 to avoid colliding with other local Postgres containers on 5432;
-      # in-network traffic (api -> postgres) still uses 5432 via the service name.
-      - "55432:5432"
+      # Dev only, loopback only. Host port 55432 avoids clashing with a local
+      # Postgres on 5432; in-network traffic (api -> postgres) uses 5432.
+      - "127.0.0.1:55432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-clockedin} -d ${POSTGRES_DB:-clockedin}"]
       interval: 10s
@@ -30,7 +32,7 @@ services:
     volumes:
       - redis_data:/data
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -44,10 +46,11 @@ services:
     container_name: clockedin-api
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     env_file:
       - .env
     environment:
+      MIGRATE_ON_START: "true"
       DATABASE_URL: postgresql://${POSTGRES_USER:-clockedin}:${POSTGRES_PASSWORD:-clockedin_dev}@postgres:5432/${POSTGRES_DB:-clockedin}
       REDIS_URL: redis://redis:6379/0
     depends_on:

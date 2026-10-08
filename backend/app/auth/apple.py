@@ -7,11 +7,10 @@ import asyncio
 import time
 
 import httpx
-from jose import jwt, JWTError
+from jose import JWTError, jwt
 from jose.exceptions import ExpiredSignatureError
 
 from app.config import config
-
 
 # Apple's public key endpoint for JWT verification
 APPLE_KEYS_URL = "https://appleid.apple.com/auth/keys"

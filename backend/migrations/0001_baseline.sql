@@ -1,10 +1,9 @@
+-- 0001 baseline: identical to the original init.sql schema (pre-migrations).
+-- Databases created from init.sql are detected by scripts/migrate.py and
+-- this file is recorded as applied without running it.
+
 -- Clocked-In Backend Database Initialization
 -- PostgreSQL 15+
---
--- DEPRECATED as a source of truth: the schema is now managed by numbered
--- files in migrations/ applied by scripts/migrate.py. This file is kept
--- identical to migrations/0001_baseline.sql for reference; databases created
--- from it are detected by migrate.py and upgraded from 0002 onwards.
 
 -- =============================================================================
 -- USERS TABLE

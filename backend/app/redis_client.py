@@ -9,21 +9,25 @@ from app.config import config
 _redis: Redis | None = None
 
 
-async def init_redis() -> None:
-    """Initialize the Redis connection."""
+async def init_redis() -> Redis:
+    """Initialize the shared Redis connection pool."""
     global _redis
-    _redis = redis.from_url(
-        config.REDIS_URL,
-        encoding="utf-8",
-        decode_responses=True,
-    )
+    if _redis is None:
+        _redis = redis.from_url(
+            config.REDIS_URL,
+            encoding="utf-8",
+            decode_responses=True,
+            health_check_interval=30,
+            socket_keepalive=True,
+        )
+    return _redis
 
 
 async def close_redis() -> None:
-    """Close the Redis connection."""
+    """Close the Redis connection pool."""
     global _redis
     if _redis:
-        await _redis.close()
+        await _redis.aclose()
         _redis = None
 
 

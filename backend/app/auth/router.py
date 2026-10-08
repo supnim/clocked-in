@@ -11,6 +11,7 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
 from app.api.deps import get_current_user
+from app.api.ratelimit import rate_limit_ip
 from app.auth.apple import verify_apple_identity_token
 from app.auth.jwt import create_access_token
 from app.auth.oauth import (
@@ -50,7 +51,11 @@ class DeviceRegisterResponse(BaseModel):
     is_new: bool
 
 
-@router.post("/device", response_model=DeviceRegisterResponse)
+@router.post(
+    "/device",
+    response_model=DeviceRegisterResponse,
+    dependencies=[Depends(rate_limit_ip("auth_device", 10, 3600))],
+)
 async def register_device(
     request: DeviceRegisterRequest,
     db: Annotated[asyncpg.Connection, Depends(get_db)],
@@ -85,9 +90,7 @@ async def register_device(
         "SELECT id FROM users WHERE device_id = $1", request.device_id
     )
     token = create_access_token(user_id=str(user["id"]))
-    return DeviceRegisterResponse(
-        token=token, user_id=str(user["id"]), is_new=False
-    )
+    return DeviceRegisterResponse(token=token, user_id=str(user["id"]), is_new=False)
 
 
 @router.get("/google")
@@ -124,7 +127,13 @@ async def google_callback(
 
     # Get user info from Google
     google_user = await get_google_user_info(access_token)
-    email = google_user["email"]
+    email = google_user.get("email")
+    # Only trust (and link by) an email Google has verified; otherwise anyone
+    # could claim an existing user's address and take over that account.
+    if not email or google_user.get("verified_email") is not True:
+        raise HTTPException(
+            status_code=403, detail="Google account email is not verified"
+        )
     name = google_user.get("name", "")
     picture = google_user.get("picture", "")
 
@@ -185,8 +194,10 @@ async def refresh_token(
 class AppleSignInRequest(BaseModel):
     """Request body for Apple Sign-In."""
 
-    identity_token: str
-    full_name: str | None = None
+    identity_token: str = Field(min_length=1, max_length=8192)
+    full_name: str | None = Field(default=None, max_length=100)
+    # Accepted for backwards compatibility but IGNORED: the email used for
+    # lookup/linking comes only from the verified identity token.
     email: str | None = None
 
 
@@ -215,7 +226,11 @@ async def apple_sign_in(
 
     # Extract user info from verified token
     apple_user_id = payload["sub"]  # Apple's unique identifier
-    email = payload.get("email") or request.email  # Email might be in token or request
+    # Never trust client-supplied email (account takeover). Use the token's
+    # email only when Apple marks it verified (bool or "true" string).
+    email = payload.get("email")
+    if str(payload.get("email_verified", "")).lower() != "true":
+        email = None
 
     # Find existing user by Apple ID (stored in apple_user_id column)
     user = await db.fetchrow(
@@ -240,7 +255,7 @@ async def apple_sign_in(
     if user is None:
         # Create new user
         user_id = str(uuid.uuid4())
-        display_name = request.full_name or ""
+        display_name = (request.full_name or "").strip()[:50] or None
 
         # Generate username from email or Apple ID
         if email:

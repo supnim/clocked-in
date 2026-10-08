@@ -5,7 +5,17 @@ from datetime import datetime, timedelta, timezone
 from fastapi import HTTPException, status
 from jose import JWTError, jwt
 
-from app.config import config
+from app.config import MIN_JWT_SECRET_BYTES, config
+
+
+def _secret() -> str:
+    """Return the signing secret, refusing to operate with a weak one."""
+    secret = config.JWT_SECRET
+    if not secret or len(secret.encode()) < MIN_JWT_SECRET_BYTES:
+        raise RuntimeError(
+            f"JWT_SECRET must be set and at least {MIN_JWT_SECRET_BYTES} bytes"
+        )
+    return secret
 
 
 def create_access_token(user_id: str) -> str:
@@ -17,9 +27,10 @@ def create_access_token(user_id: str) -> str:
     Returns:
         Encoded JWT string.
     """
-    expire = datetime.now(timezone.utc) + timedelta(hours=config.JWT_EXPIRATION_HOURS)
-    to_encode = {"sub": user_id, "exp": expire}
-    return jwt.encode(to_encode, config.JWT_SECRET, algorithm=config.JWT_ALGORITHM)
+    now = datetime.now(timezone.utc)
+    expire = now + timedelta(hours=config.JWT_EXPIRATION_HOURS)
+    to_encode = {"sub": user_id, "exp": expire, "iat": now}
+    return jwt.encode(to_encode, _secret(), algorithm=config.JWT_ALGORITHM)
 
 
 def verify_token(token: str) -> dict:
@@ -36,7 +47,10 @@ def verify_token(token: str) -> dict:
     """
     try:
         payload = jwt.decode(
-            token, config.JWT_SECRET, algorithms=[config.JWT_ALGORITHM]
+            token,
+            _secret(),
+            algorithms=[config.JWT_ALGORITHM],
+            options={"require_exp": True, "require_sub": True},
         )
         return payload
     except JWTError as e:

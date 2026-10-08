@@ -6,30 +6,78 @@ via Redis pub/sub; nudges are not. Move nudges to a Redis channel before
 scaling workers.
 """
 
+import asyncio
 import logging
-from contextlib import asynccontextmanager
-from typing import AsyncGenerator
+import os
+import re
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager, suppress
+from uuid import UUID
 
+import asyncpg
+from fastapi import Depends, FastAPI, HTTPException, Query, WebSocket
+from fastapi.responses import JSONResponse
+from redis.exceptions import RedisError
+
+from app.api.deps import authenticate_token, get_current_user
+from app.api.friends import router as friends_router
+from app.api.users import router as users_router
+from app.auth.router import router as auth_router
+from app.config import config
+from app.config import validate as validate_config
+from app.database import close_db, get_pool, init_db
+from app.redis_client import close_redis, get_redis, init_redis
+from app.ws.manager import Connection, manager
+from app.ws.presence import presence_manager
+from app.ws.session import PresenceSession
+
+# -----------------------------------------------------------------------------
+# Logging
+# -----------------------------------------------------------------------------
+
+_TOKEN_RE = re.compile(r"(token=)[^&\s\"']*", re.IGNORECASE)
+
+
+class RedactTokenFilter(logging.Filter):
+    """Redact ``token=...`` query params (WS auth) from uvicorn log lines."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.msg, str) and "token=" in record.msg.lower():
+            record.msg = _TOKEN_RE.sub(r"\1[REDACTED]", record.msg)
+        if record.args:
+            args = record.args if isinstance(record.args, tuple) else (record.args,)
+            if any(isinstance(a, str) and "token=" in a.lower() for a in args):
+                redacted = tuple(
+                    _TOKEN_RE.sub(r"\1[REDACTED]", a) if isinstance(a, str) else a
+                    for a in args
+                )
+                record.args = (
+                    redacted if isinstance(record.args, tuple) else redacted[0]
+                )
+        return True
+
+
+def configure_logging() -> None:
+    logging.basicConfig(
+        level=os.getenv("LOG_LEVEL", "INFO").upper(),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    for name in ("uvicorn.access", "uvicorn.error", "uvicorn"):
+        lg = logging.getLogger(name)
+        if not any(isinstance(f, RedactTokenFilter) for f in lg.filters):
+            lg.addFilter(RedactTokenFilter())
+
+
+configure_logging()
 logger = logging.getLogger(__name__)
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, Depends
-
-from app.config import config, validate as validate_config
-from app.database import close_db, get_pool, init_db
-from app.api.deps import get_current_user
-from app.redis_client import close_redis, get_redis, init_redis
-from app.auth.router import router as auth_router
-from app.auth.jwt import verify_token
-from app.api.users import router as users_router
-from app.api.friends import router as friends_router
-from app.ws.manager import manager
-from app.ws.presence import presence_manager
+PRESENCE_SWEEP_INTERVAL = float(os.getenv("PRESENCE_SWEEP_INTERVAL", "30"))
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan handler for startup and shutdown."""
-    # Startup
+    configure_logging()  # uvicorn may have reconfigured loggers after import
     validate_config()
     logger.warning(
         "Starting Clocked-In API (debug=%s, jwt_secret_is_default=%s)",
@@ -38,13 +86,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     pool = await init_db()
     await init_redis()
-    # Set database pool on presence manager for friend lookups
     presence_manager.set_db_pool(pool)
-    yield
-    # Shutdown
-    await presence_manager.close()
-    await close_redis()
-    await close_db()
+    sweeper = asyncio.create_task(
+        presence_manager.run_sweeper(PRESENCE_SWEEP_INTERVAL), name="presence-sweeper"
+    )
+    try:
+        yield
+    finally:
+        sweeper.cancel()
+        with suppress(asyncio.CancelledError):
+            await sweeper
+        await presence_manager.close()
+        await close_redis()
+        await close_db()
 
 
 app = FastAPI(
@@ -54,7 +108,6 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Include routers
 app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(friends_router)
@@ -62,109 +115,85 @@ app.include_router(friends_router)
 
 @app.get("/health")
 async def health_check() -> dict:
-    """Health check endpoint."""
+    """Liveness check endpoint."""
     return {"status": "ok"}
+
+
+@app.get("/health/ready")
+async def readiness_check() -> JSONResponse:
+    """Readiness: verifies Postgres and Redis are reachable."""
+    checks: dict[str, str] = {}
+
+    pool = get_pool()
+    try:
+        if pool is None:
+            raise RuntimeError("pool not initialized")
+        async with pool.acquire() as conn:
+            await asyncio.wait_for(conn.fetchval("SELECT 1"), timeout=2)
+        checks["postgres"] = "ok"
+    except (OSError, RuntimeError, TimeoutError, asyncpg.PostgresError) as exc:
+        logger.warning("Readiness: postgres check failed: %s", exc)
+        checks["postgres"] = "error"
+
+    try:
+        await asyncio.wait_for(get_redis().ping(), timeout=2)
+        checks["redis"] = "ok"
+    except (OSError, RuntimeError, TimeoutError, RedisError) as exc:
+        logger.warning("Readiness: redis check failed: %s", exc)
+        checks["redis"] = "error"
+
+    ok = all(v == "ok" for v in checks.values())
+    return JSONResponse(
+        status_code=200 if ok else 503,
+        content={"status": "ok" if ok else "unavailable", **checks},
+    )
 
 
 @app.post("/api/presence/offline")
 async def go_offline(current_user: str = Depends(get_current_user)) -> dict:
     """Explicitly set user offline (for graceful app quit).
 
-    This endpoint allows the client to notify the server that the user
-    is going offline, even if the WebSocket connection can't be closed
-    gracefully (e.g., app force-quit, crash).
+    Lets the client mark itself offline even if the WebSocket can't be closed
+    gracefully. The socket (if any) stays registered so nudges still arrive.
     """
     await presence_manager.set_offline(current_user)
-    manager.disconnect(current_user)
     return {"status": "offline"}
+
+
+async def _fetch_username(user_id: str) -> str | None:
+    pool = get_pool()
+    if pool is None:
+        return None
+    async with pool.acquire() as conn:
+        return await conn.fetchval(
+            "SELECT username FROM users WHERE id = $1", UUID(user_id)
+        )
 
 
 @app.websocket("/ws")
 async def websocket_endpoint(
-    websocket: WebSocket,
-    token: str = Query(default=None)
+    websocket: WebSocket, token: str | None = Query(default=None)
 ) -> None:
-    """WebSocket endpoint for real-time presence updates.
-
-    Message types:
-    - heartbeat: Refresh presence TTL
-    - presence_update: Update current activity
-    - nudge: Send nudge to a friend
-    """
-    # Authenticate
+    """WebSocket endpoint for real-time presence (see app/ws/session.py)."""
     if not token:
         await websocket.close(code=4001, reason="Missing token")
         return
-
     try:
-        payload = verify_token(token)
-        user_id = payload.get("sub")
-        if not user_id:
-            await websocket.close(code=4001, reason="Invalid token")
-            return
-    except Exception:
+        user_id = await authenticate_token(token)
+    except HTTPException:
         await websocket.close(code=4001, reason="Invalid token")
         return
-
-    # Connect
-    await manager.connect(websocket, user_id)
-
-    try:
-        # Subscribe to friends' presence updates
-        await presence_manager.subscribe_to_friends(user_id, websocket)
-
-        # Send initial friends presence
-        friends_presence = await presence_manager.get_friends_presence(user_id)
-        if friends_presence:
-            await websocket.send_json({
-                "type": "initial_presence",
-                "data": friends_presence
-            })
-
-        # Message loop
-        while True:
-            data = await websocket.receive_json()
-            msg_type = data.get("type")
-
-            if msg_type == "heartbeat":
-                await presence_manager.heartbeat(user_id)
-
-            elif msg_type == "presence_update":
-                presence_data = data.get("data", {})
-                if not isinstance(presence_data, dict) or "app_name" not in presence_data:
-                    continue
-                await presence_manager.update_presence(user_id, presence_data)
-
-            elif msg_type == "nudge":
-                target_user_id = data.get("data", {}).get("to_user_id")
-                if not isinstance(target_user_id, str) or not target_user_id.strip():
-                    continue
-                # Get sender username for the nudge display
-                sender_username = None
-                pool = get_pool()
-                if pool:
-                    async with pool.acquire() as conn:
-                        row = await conn.fetchrow(
-                            "SELECT username FROM users WHERE id = $1::uuid",
-                            user_id,
-                        )
-                        if row:
-                            sender_username = row["username"]
-
-                await manager.send_to_user(target_user_id, {
-                    "type": "nudge",
-                    "data": {
-                        "from_user_id": user_id,
-                        "from_username": sender_username
-                    }
-                })
-
-    except WebSocketDisconnect:
-        pass
     except Exception:
-        logger.exception("WebSocket error for user %s", user_id)
-    finally:
-        # Cleanup
-        manager.disconnect(user_id)
-        await presence_manager.unsubscribe(user_id)
-        await presence_manager.set_offline(user_id)
+        logger.exception("WS auth failed unexpectedly")
+        await websocket.close(code=1011)
+        return
+
+    await websocket.accept()
+    conn = Connection(
+        websocket=websocket, user_id=user_id, username=await _fetch_username(user_id)
+    )
+    previous = manager.register(conn)
+    if previous is not None:
+        await previous.close(code=4000, reason="Replaced by newer connection")
+
+    await PresenceSession(conn).run()
