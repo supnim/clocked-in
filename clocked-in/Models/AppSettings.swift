@@ -7,7 +7,14 @@ final class AppSettings {
     static let shared = AppSettings()
 
     var hiddenApps: [String] {
-        didSet { defaults.set(hiddenApps, forKey: Keys.hiddenApps) }
+        didSet {
+            defaults.set(hiddenApps, forKey: Keys.hiddenApps)
+            guard oldValue != hiddenApps else { return }
+            // Hiding the app the user is in right now must take effect immediately
+            Task {
+                await PresenceManager.shared.hiddenAppsDidChange()
+            }
+        }
     }
 
     // MARK: - Hidden Apps Management

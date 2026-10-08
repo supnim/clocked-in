@@ -201,6 +201,15 @@ final class PresenceManager {
         }
     }
 
+    // MARK: - Hidden Apps
+
+    /// Called by AppSettings when the hidden-apps list changes: re-publishes so the
+    /// current app switches to/from "ghost" without waiting for the next app switch.
+    func hiddenAppsDidChange() async {
+        guard lastActivity != nil else { return }
+        await publishCurrentPresence()
+    }
+
     // MARK: - Connection Management
 
     func startPresence() {

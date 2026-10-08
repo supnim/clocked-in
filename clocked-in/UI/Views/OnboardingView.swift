@@ -4,6 +4,9 @@ import AuthenticationServices
 struct OnboardingView: View {
     /// Called once the user is authenticated and has a username.
     var onFinished: () -> Void = {}
+    /// Register/sign in with the device identity as soon as the view appears.
+    /// False after a user-initiated sign-out: show a "Sign In" button instead.
+    var autoRegister: Bool = true
 
     @State private var authError: AppError?
     @State private var isRegistering = false
@@ -37,8 +40,8 @@ struct OnboardingView: View {
             } else if needsUsername {
                 // Show username picker after device registration (new users only)
                 UsernamePickerView(onComplete: completeSetup)
-            } else if registrationFailed {
-                Button("Try Again") {
+            } else if registrationFailed || !autoRegister {
+                Button(registrationFailed ? "Try Again" : "Sign In") {
                     Task { await registerDevice() }
                 }
             }
@@ -57,6 +60,7 @@ struct OnboardingView: View {
         .padding()
         .frame(width: 320, height: 480)
         .task {
+            guard autoRegister else { return }
             await registerDevice()
         }
     }

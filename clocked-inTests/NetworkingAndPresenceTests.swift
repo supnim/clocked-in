@@ -191,13 +191,17 @@ final class FriendPresenceDecodingTests: XCTestCase {
 
 @MainActor
 final class PresencePayloadTests: XCTestCase {
-    private let xcode = Activity(
-        appName: "Xcode",
-        bundleId: "com.apple.dt.Xcode",
-        windowTitle: "Secret.swift — MyProject",
-        browserDomain: "secret.example.com",
-        appIcon: Data([0x89, 0x50, 0x4E, 0x47])
-    )
+    // Computed (not a stored default): Activity's init is MainActor-isolated, and a
+    // stored property default would run in XCTestCase's nonisolated initializers.
+    private var xcode: Activity {
+        Activity(
+            appName: "Xcode",
+            bundleId: "com.apple.dt.Xcode",
+            windowTitle: "Secret.swift — MyProject",
+            browserDomain: "secret.example.com",
+            appIcon: Data([0x89, 0x50, 0x4E, 0x47])
+        )
+    }
 
     func testHiddenAppIsGhostWithNoAppFields() {
         let payload = PresencePayload.make(activity: xcode, isIdle: false, hiddenApps: ["com.apple.dt.Xcode"])

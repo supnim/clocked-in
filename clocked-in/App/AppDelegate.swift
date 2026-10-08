@@ -136,9 +136,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             return
         }
 
-        let onboardingView = OnboardingView(onFinished: { [weak self] in
-            self?.finishOnboarding()
-        })
+        // After a user-initiated sign-out / deletion, wait for the user to sign in again
+        // (auto-registering would sign straight back in / create a new account).
+        let onboardingView = OnboardingView(
+            onFinished: { [weak self] in
+                self?.finishOnboarding()
+            },
+            autoRegister: !AuthManager.shared.requiresExplicitSignIn
+        )
         let window = createWindow(
             content: onboardingView,
             title: "Welcome to Clocked-In",

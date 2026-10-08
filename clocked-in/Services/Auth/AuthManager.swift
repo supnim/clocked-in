@@ -40,6 +40,11 @@ final class AuthManager {
     @ObservationIgnored
     private var isEndingSession = false
 
+    /// Set by user-initiated sign-out / account deletion so onboarding waits for the user
+    /// instead of immediately signing back in with the device identity.
+    @ObservationIgnored
+    private(set) var requiresExplicitSignIn = false
+
     @ObservationIgnored
     private var reauthTask: Task<Bool, Never>?
 
@@ -61,6 +66,7 @@ final class AuthManager {
     /// Registers or logs in with a device-generated UUID. No user interaction needed.
     /// Does NOT connect the WebSocket; AppDelegate.startServices owns that.
     func signInWithDevice() async throws {
+        requiresExplicitSignIn = false
         isLoading = true
         defer { isLoading = false }
 
@@ -211,6 +217,7 @@ final class AuthManager {
     /// AppDelegate shows onboarding again. The device identity is kept: it is the only
     /// credential for the account, so forgetting it would strand the account forever.
     func signOut() {
+        requiresExplicitSignIn = true
         Task { await endSession(forgetDevice: false) }
     }
 
@@ -223,6 +230,7 @@ final class AuthManager {
     /// Permanently deletes the account on the server, then performs the same teardown as sign-out.
     func deleteAccount() async throws {
         try await APIClient.shared.deleteAccount()
+        requiresExplicitSignIn = true
         await endSession(forgetDevice: true)
     }
 
